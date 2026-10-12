@@ -1,0 +1,31 @@
+# Flutter / Dart
+.dart_tool/
+build/
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+
+# IDE
+.idea/
+*.iml
+
+# Local secrets
+cookies.txt
+*.cookies.txt
+.env
+.env.*
+*.key
+*.pem
+
+# Temporary downloads
+*.part
+*.ytdl
+*.tmp
+*.temp
+
+# Generated executables
+*.exe
+
+README_APPLY.txt
+*.bak
