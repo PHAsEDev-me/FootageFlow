@@ -7,6 +7,7 @@
 #include <flutter/standard_method_codec.h>
 
 #include <optional>
+#include <cstdio>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -31,6 +32,74 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+
+  // Persistent channel: its lifetime must match the Flutter engine.
+  window_focus_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "footageflow/window_focus",
+      &flutter::StandardMethodCodec::GetInstance());
+  window_focus_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        std::fprintf(stderr, "[FootageFlow Native Focus] received method: %s\n", call.method_name().c_str());
+        std::fflush(stderr);
+        if (call.method_name() != "activate" && call.method_name() != "inspect") {
+          result->NotImplemented();
+          return;
+        }
+        HWND hwnd = GetHandle();
+        if (!hwnd || !IsWindow(hwnd)) {
+          result->Error("no_window", "FootageFlow HWND is unavailable");
+          return;
+        }
+        const bool was_minimized = IsIconic(hwnd) != FALSE;
+        if (call.method_name() == "activate") {
+        if (was_minimized) ShowWindow(hwnd, SW_RESTORE);
+        else ShowWindow(hwnd, SW_SHOW);
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        BringWindowToTop(hwnd);
+
+        HWND foreground = GetForegroundWindow();
+        DWORD foreground_thread = foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+        DWORD current_thread = GetCurrentThreadId();
+        bool attached = false;
+        if (foreground_thread && foreground_thread != current_thread) {
+          attached = AttachThreadInput(current_thread, foreground_thread, TRUE) != FALSE;
+        }
+        const BOOL set_foreground_ok = SetForegroundWindow(hwnd);
+        if (attached) AttachThreadInput(current_thread, foreground_thread, FALSE);
+        const bool focused = GetForegroundWindow() == hwnd;
+        if (!focused) {
+          FLASHWINFO flash = {};
+          flash.cbSize = sizeof(flash);
+          flash.hwnd = hwnd;
+          flash.dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG;
+          flash.uCount = 3;
+          FlashWindowEx(&flash);
+        }
+        std::fprintf(stderr, "[FootageFlow Native Focus] SetForegroundWindow=%d, attached=%d\n", set_foreground_ok != FALSE, attached);
+        } // end activate; inspect must not change window state
+        const bool currently_focused = GetForegroundWindow() == hwnd;
+        const HWND above = GetWindow(hwnd, GW_HWNDPREV);
+        const bool top_of_z_order = above == nullptr;
+        const HWND foreground_now = GetForegroundWindow();
+        DWORD foreground_pid = 0;
+        if (foreground_now) GetWindowThreadProcessId(foreground_now, &foreground_pid);
+        flutter::EncodableMap details;
+        details[flutter::EncodableValue("focused")] = flutter::EncodableValue(currently_focused);
+        details[flutter::EncodableValue("topOfZOrder")] = flutter::EncodableValue(top_of_z_order);
+        details[flutter::EncodableValue("windowVisible")] = flutter::EncodableValue(IsWindowVisible(hwnd) != FALSE);
+        details[flutter::EncodableValue("foregroundPid")] = flutter::EncodableValue(static_cast<int64_t>(foreground_pid));
+        details[flutter::EncodableValue("foregroundHwnd")] = flutter::EncodableValue(static_cast<int64_t>(reinterpret_cast<intptr_t>(foreground_now)));
+        details[flutter::EncodableValue("wasMinimized")] = flutter::EncodableValue(was_minimized);
+        details[flutter::EncodableValue("hwnd")] = flutter::EncodableValue(static_cast<int64_t>(reinterpret_cast<intptr_t>(hwnd)));
+        result->Success(flutter::EncodableValue(details));
+      });
+
+  std::fprintf(stderr, "[FootageFlow Native Focus] channel registered: footageflow/window_focus\n");
+  std::fflush(stderr);
 
   // Footage Collector: Explorer/Adobe-compatible multi-file drag.
   static std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> multi_drag_channel;
@@ -115,6 +184,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  window_focus_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

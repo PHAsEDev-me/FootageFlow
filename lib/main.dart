@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -270,15 +271,17 @@ class ProjectModel {
   final String id;
   final String name;
   final String path;
+  final String source;
   final DateTime createdAt;
 
-  const ProjectModel({required this.id, required this.name, required this.path, required this.createdAt});
+  const ProjectModel({required this.id, required this.name, required this.path, required this.createdAt, this.source=""});
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'path': path, 'createdAt': createdAt.toIso8601String()};
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'path': path, 'source': source, 'createdAt': createdAt.toIso8601String()};
   factory ProjectModel.fromJson(Map<String, dynamic> json) => ProjectModel(
         id: json['id'] as String,
         name: json['name'] as String,
         path: json['path'] as String,
+        source: '${json['source']??''}',
         createdAt: DateTime.parse(json['createdAt'] as String),
       );
 }
@@ -378,13 +381,14 @@ class AppSettingsStore {
 class LibraryItem {
   final String id, title, filePath, projectId, projectName, formatLabel;
   final String? thumbnail, collection, sourceUrl, outputMode, clipStart, clipEnd;
+  final List<String> tags;
   final int sizeBytes;
   final DateTime addedAt;
   final bool favorite;
-  const LibraryItem({required this.id, required this.title, required this.filePath, required this.projectId, required this.projectName, required this.formatLabel, this.thumbnail, this.collection, this.sourceUrl, this.outputMode, this.clipStart, this.clipEnd, required this.sizeBytes, required this.addedAt, this.favorite=false});
-  Map<String,dynamic> toJson()=>{'id':id,'title':title,'filePath':filePath,'projectId':projectId,'projectName':projectName,'formatLabel':formatLabel,'thumbnail':thumbnail,'collection':collection,'sourceUrl':sourceUrl,'outputMode':outputMode,'clipStart':clipStart,'clipEnd':clipEnd,'sizeBytes':sizeBytes,'addedAt':addedAt.toIso8601String(),'favorite':favorite};
-  factory LibraryItem.fromJson(Map<String,dynamic> j)=>LibraryItem(id:'${j['id']}',title:'${j['title']}',filePath:'${j['filePath']}',projectId:'${j['projectId']}',projectName:'${j['projectName']}',formatLabel:'${j['formatLabel']}',thumbnail:j['thumbnail'] as String?,collection:j['collection'] as String?,sourceUrl:j['sourceUrl'] as String?,outputMode:j['outputMode'] as String?,clipStart:j['clipStart'] as String?,clipEnd:j['clipEnd'] as String?,sizeBytes:(j['sizeBytes'] as num?)?.toInt()??0,addedAt:DateTime.tryParse('${j['addedAt']}')??DateTime.now(),favorite:j['favorite']==true);
-  LibraryItem copyWith({String? filePath,String? projectId,String? projectName,String? thumbnail,String? collection,bool clearCollection=false,bool? favorite})=>LibraryItem(id:id,title:title,filePath:filePath??this.filePath,projectId:projectId??this.projectId,projectName:projectName??this.projectName,formatLabel:formatLabel,thumbnail:thumbnail??this.thumbnail,collection:clearCollection?null:(collection??this.collection),sourceUrl:sourceUrl,outputMode:outputMode,clipStart:clipStart,clipEnd:clipEnd,sizeBytes:sizeBytes,addedAt:addedAt,favorite:favorite??this.favorite);
+  const LibraryItem({required this.id, required this.title, required this.filePath, required this.projectId, required this.projectName, required this.formatLabel, this.thumbnail, this.collection, this.sourceUrl, this.outputMode, this.clipStart, this.clipEnd, this.tags=const [], required this.sizeBytes, required this.addedAt, this.favorite=false});
+  Map<String,dynamic> toJson()=>{'id':id,'title':title,'filePath':filePath,'projectId':projectId,'projectName':projectName,'formatLabel':formatLabel,'thumbnail':thumbnail,'collection':collection,'sourceUrl':sourceUrl,'outputMode':outputMode,'clipStart':clipStart,'clipEnd':clipEnd,'tags':tags,'sizeBytes':sizeBytes,'addedAt':addedAt.toIso8601String(),'favorite':favorite};
+  factory LibraryItem.fromJson(Map<String,dynamic> j)=>LibraryItem(id:'${j['id']}',title:'${j['title']}',filePath:'${j['filePath']}',projectId:'${j['projectId']}',projectName:'${j['projectName']}',formatLabel:'${j['formatLabel']}',thumbnail:j['thumbnail'] as String?,collection:j['collection'] as String?,sourceUrl:j['sourceUrl'] as String?,outputMode:j['outputMode'] as String?,clipStart:j['clipStart'] as String?,clipEnd:j['clipEnd'] as String?,tags:(j['tags'] as List? ?? const []).map((e)=>'$e').toList(),sizeBytes:(j['sizeBytes'] as num?)?.toInt()??0,addedAt:DateTime.tryParse('${j['addedAt']}')??DateTime.now(),favorite:j['favorite']==true);
+  LibraryItem copyWith({String? filePath,String? projectId,String? projectName,String? thumbnail,String? collection,bool clearCollection=false,bool? favorite,List<String>? tags})=>LibraryItem(id:id,title:title,filePath:filePath??this.filePath,projectId:projectId??this.projectId,projectName:projectName??this.projectName,formatLabel:formatLabel,thumbnail:thumbnail??this.thumbnail,collection:clearCollection?null:(collection??this.collection),sourceUrl:sourceUrl,outputMode:outputMode,clipStart:clipStart,clipEnd:clipEnd,sizeBytes:sizeBytes,addedAt:addedAt,favorite:favorite??this.favorite,tags:tags??this.tags);
 }
 
 Future<String?> _cacheThumbnailLocally(String? source, {String? videoPath}) async {
@@ -412,7 +416,7 @@ Future<String?> _cacheThumbnailLocally(String? source, {String? videoPath}) asyn
       final ff=DownloaderEngine.ffmpegPath;
       if(ff.isNotEmpty&&File(ff).existsSync()){
         final out='$base${Platform.pathSeparator}${DateTime.now().microsecondsSinceEpoch}.jpg';
-        final r=await Process.run(ff,['-y','-ss','00:00:01','-i',videoPath,'-frames:v','1','-vf','scale=320:-1',out]);
+        final r=await Process.run(ff,['-y','-ss','00:00:01','-i',videoPath,'-frames:v','1','-q:v','2',out]);
         if(r.exitCode==0&&File(out).existsSync())return out;
       }
     }
@@ -438,8 +442,16 @@ class LibraryStore extends ChangeNotifier {
   Future<void> _save() async { final p=await SharedPreferences.getInstance(); await p.setString(_itemsKey,jsonEncode(items.map((e)=>e.toJson()).toList())); await p.setString(_collectionsKey,jsonEncode(collections)); notifyListeners(); }
   List<String> collectionsFor(String projectId)=>collections[projectId]??const [];
   Future<void> addCollection(String projectId,String name) async { final n=name.trim(); if(n.isEmpty)return; final list=[...(collections[projectId]??const <String>[])]; if(!list.any((e)=>e.toLowerCase()==n.toLowerCase())){list.add(n);collections[projectId]=list;await _save();} }
-  Future<void> renameCollection(String projectId,String oldName,String newName) async { final n=newName.trim(); if(n.isEmpty)return; final list=[...(collections[projectId]??const <String>[])]; if(list.any((e)=>e.toLowerCase()==n.toLowerCase()&&e.toLowerCase()!=oldName.toLowerCase()))return; final idx=list.indexOf(oldName); if(idx<0)return; list[idx]=n; collections[projectId]=list; for(var i=0;i<items.length;i++){final e=items[i];if(e.projectId==projectId&&e.collection==oldName){items[i]=LibraryItem(id:e.id,title:e.title,filePath:e.filePath,projectId:e.projectId,projectName:e.projectName,formatLabel:e.formatLabel,thumbnail:e.thumbnail,collection:n,sourceUrl:e.sourceUrl,outputMode:e.outputMode,clipStart:e.clipStart,clipEnd:e.clipEnd,sizeBytes:e.sizeBytes,addedAt:e.addedAt,favorite:e.favorite);}} await _save(); }
-  Future<void> deleteCollection(String projectId,String name) async { final list=[...(collections[projectId]??const <String>[])]; list.remove(name); collections[projectId]=list; for(var i=0;i<items.length;i++){final e=items[i];if(e.projectId==projectId&&e.collection==name){items[i]=LibraryItem(id:e.id,title:e.title,filePath:e.filePath,projectId:e.projectId,projectName:e.projectName,formatLabel:e.formatLabel,thumbnail:e.thumbnail,collection:null,sourceUrl:e.sourceUrl,outputMode:e.outputMode,clipStart:e.clipStart,clipEnd:e.clipEnd,sizeBytes:e.sizeBytes,addedAt:e.addedAt,favorite:e.favorite);}} await _save(); }
+  Future<void> renameCollection(String projectId,String oldName,String newName) async { final n=newName.trim(); if(n.isEmpty)return; final list=[...(collections[projectId]??const <String>[])]; if(list.any((e)=>e.toLowerCase()==n.toLowerCase()&&e.toLowerCase()!=oldName.toLowerCase()))return; final idx=list.indexOf(oldName); if(idx<0)return; list[idx]=n; collections[projectId]=list; for(var i=0;i<items.length;i++){final e=items[i];if(e.projectId==projectId&&e.collection==oldName){items[i]=LibraryItem(id:e.id,title:e.title,filePath:e.filePath,projectId:e.projectId,projectName:e.projectName,formatLabel:e.formatLabel,thumbnail:e.thumbnail,collection:n,sourceUrl:e.sourceUrl,outputMode:e.outputMode,clipStart:e.clipStart,clipEnd:e.clipEnd,sizeBytes:e.sizeBytes,addedAt:e.addedAt,favorite:e.favorite,tags:e.tags);}} await _save(); }
+  Future<void> deleteCollection(String projectId,String name) async { final list=[...(collections[projectId]??const <String>[])]; list.remove(name); collections[projectId]=list; for(var i=0;i<items.length;i++){final e=items[i];if(e.projectId==projectId&&e.collection==name){items[i]=LibraryItem(id:e.id,title:e.title,filePath:e.filePath,projectId:e.projectId,projectName:e.projectName,formatLabel:e.formatLabel,thumbnail:e.thumbnail,collection:null,sourceUrl:e.sourceUrl,outputMode:e.outputMode,clipStart:e.clipStart,clipEnd:e.clipEnd,sizeBytes:e.sizeBytes,addedAt:e.addedAt,favorite:e.favorite,tags:e.tags);}} await _save(); }
+  Future<void> updateThumbnail(LibraryItem item,String thumbnail) async {
+    final i=items.indexWhere((e)=>e.id==item.id);
+    if(i<0)return;
+    items[i]=items[i].copyWith(thumbnail:thumbnail);
+    await _save();
+  }
+  Future<void> updateTags(LibraryItem item,List<String> tags) async { final i=items.indexWhere((e)=>e.id==item.id); if(i<0)return; items[i]=items[i].copyWith(tags:tags); await _save(); }
+  Future<void> renameProject(String id,String name) async { for(var i=0;i<items.length;i++){if(items[i].projectId==id)items[i]=items[i].copyWith(projectName:name);} await _save(); }
   Future<void> addItem(LibraryItem item) async { if(items.any((e)=>e.filePath.toLowerCase()==item.filePath.toLowerCase()))return; items.insert(0,item); await _save(); }
   Future<void> replaceDownloadedItem(LibraryItem item,{String? sourceUrl}) async {
     final src=(sourceUrl??item.sourceUrl??'').trim();
@@ -449,18 +461,18 @@ class LibraryStore extends ChangeNotifier {
   }
   Future<int> addItems(Iterable<LibraryItem> incoming) async { final known=items.map((e)=>e.filePath.toLowerCase()).toSet(); final fresh=<LibraryItem>[]; for(final item in incoming){if(known.add(item.filePath.toLowerCase()))fresh.add(item);} if(fresh.isEmpty)return 0; items.insertAll(0,fresh.reversed); await _save(); return fresh.length; }
   Future<void> toggleFavorite(LibraryItem item) async { final i=items.indexWhere((e)=>e.id==item.id); if(i<0)return; items[i]=items[i].copyWith(favorite:!items[i].favorite); await _save(); }
-  Future<void> moveToCollection(LibraryItem item,String? collection) async { final i=items.indexWhere((e)=>e.id==item.id); if(i<0)return; items[i]=LibraryItem(id:item.id,title:item.title,filePath:item.filePath,projectId:item.projectId,projectName:item.projectName,formatLabel:item.formatLabel,thumbnail:item.thumbnail,collection:collection,sourceUrl:item.sourceUrl,outputMode:item.outputMode,clipStart:item.clipStart,clipEnd:item.clipEnd,sizeBytes:item.sizeBytes,addedAt:item.addedAt,favorite:item.favorite); await _save(); }
+  Future<void> moveToCollection(LibraryItem item,String? collection) async { final i=items.indexWhere((e)=>e.id==item.id); if(i<0)return; items[i]=LibraryItem(id:item.id,title:item.title,filePath:item.filePath,projectId:item.projectId,projectName:item.projectName,formatLabel:item.formatLabel,thumbnail:item.thumbnail,collection:collection,sourceUrl:item.sourceUrl,outputMode:item.outputMode,clipStart:item.clipStart,clipEnd:item.clipEnd,sizeBytes:item.sizeBytes,addedAt:item.addedAt,favorite:item.favorite,tags:item.tags); await _save(); }
   Future<void> updateMovedItem(LibraryItem item,{required String filePath,required ProjectModel project,String? collection}) async { final i=items.indexWhere((e)=>e.id==item.id); if(i<0)return; items[i]=item.copyWith(filePath:filePath,projectId:project.id,projectName:project.name,thumbnail:item.thumbnail==item.filePath?filePath:item.thumbnail,collection:collection,clearCollection:collection==null); await _save(); }
   Future<void> relocateProject(ProjectModel oldProject, ProjectModel newProject) async {
     String remap(String value) {
       final oldPath=oldProject.path;
-      if(value.toLowerCase().startsWith(oldPath.toLowerCase())) return newProject.path+value.substring(oldPath.length);
+      if(value.toLowerCase()==oldPath.toLowerCase() || value.toLowerCase().startsWith('${oldPath.toLowerCase()}${Platform.pathSeparator}')) return newProject.path+value.substring(oldPath.length);
       return value;
     }
     for(var i=0;i<items.length;i++){
       final e=items[i];
       if(e.projectId==oldProject.id){
-        items[i]=LibraryItem(id:e.id,title:e.title,filePath:remap(e.filePath),projectId:newProject.id,projectName:newProject.name,formatLabel:e.formatLabel,thumbnail:e.thumbnail==null?null:remap(e.thumbnail!),collection:e.collection,sourceUrl:e.sourceUrl,outputMode:e.outputMode,clipStart:e.clipStart,clipEnd:e.clipEnd,sizeBytes:e.sizeBytes,addedAt:e.addedAt,favorite:e.favorite);
+        items[i]=LibraryItem(id:e.id,title:e.title,filePath:remap(e.filePath),projectId:newProject.id,projectName:newProject.name,formatLabel:e.formatLabel,thumbnail:e.thumbnail==null?null:remap(e.thumbnail!),collection:e.collection,sourceUrl:e.sourceUrl,outputMode:e.outputMode,clipStart:e.clipStart,clipEnd:e.clipEnd,sizeBytes:e.sizeBytes,addedAt:e.addedAt,favorite:e.favorite,tags:e.tags);
       }
     }
     await _save();
@@ -490,6 +502,152 @@ class FootageCollectorApp extends StatelessWidget {
   }
 }
 
+
+/// Bring the Windows runner forward after an authenticated Chrome link.
+class FootageFlowWindowFocus {
+  static const preferenceKey = 'footageflow_focus_on_chrome_link_v1';
+  static const MethodChannel _channel = MethodChannel('footageflow/window_focus');
+
+  static Future<void> activate() async {
+    if (!Platform.isWindows) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool(preferenceKey) ?? true)) {
+        debugPrint('[FootageFlow Focus] Disabled in Settings');
+        return;
+      }
+      final result = await _channel.invokeMapMethod<String, dynamic>('activate');
+      debugPrint('[FootageFlow Focus] Initial activation: $result');
+      // Chrome may reclaim the foreground after its context menu closes.
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      final after = await _channel.invokeMapMethod<String, dynamic>('inspect');
+      debugPrint('[FootageFlow Focus] After 350ms: $after');
+      if (after?['focused'] != true || after?['topOfZOrder'] != true) {
+        final retry = await _channel.invokeMapMethod<String, dynamic>('activate');
+        debugPrint('[FootageFlow Focus] Delayed activation: $retry');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      final finalState = await _channel.invokeMapMethod<String, dynamic>('inspect');
+      debugPrint('[FootageFlow Focus] Final state after 800ms: $finalState');
+    } catch (error, stack) {
+      debugPrint('[FootageFlow Focus] Native call failed: $error');
+      debugPrintStack(stackTrace: stack);
+    }
+  }
+}
+
+/// Loopback-only Chrome bridge. A user must approve every new extension ID.
+class FootageFlowChromeBridge {
+  static HttpServer? _server;
+  static final ValueNotifier<String?> incomingUrl = ValueNotifier<String?>(null);
+  static final ValueNotifier<String?> pairingRequest = ValueNotifier<String?>(null);
+  static final ValueNotifier<bool> online = ValueNotifier<bool>(false);
+  static final Map<String, String> _tokens = {};
+  static final Map<String, String> _pending = {};
+  static final Map<String, DateTime> _requestedAt = {};
+  static final Random _random = Random.secure();
+  static String _secret() => List.generate(32, (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+
+  static Future<void> approve(String origin) async {
+    if (!_pending.containsKey(origin)) return;
+    final token = _secret();
+    _tokens[origin] = token;
+    _pending.remove(origin);
+    _requestedAt.remove(origin);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('footageflow_extension_tokens_v2', jsonEncode(_tokens));
+    pairingRequest.value = null;
+  }
+  static void reject(String origin) {
+    _pending.remove(origin);
+    _requestedAt.remove(origin);
+    pairingRequest.value = null;
+  }
+  static Future<void> revokeAll() async {
+    _tokens.clear(); _pending.clear(); _requestedAt.clear(); pairingRequest.value = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('footageflow_extension_tokens_v2');
+  }
+  static Future<void> start() async {
+    if (!Platform.isWindows || _server != null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = prefs.getString('footageflow_extension_tokens_v2');
+      if (stored != null) {
+        final data = jsonDecode(stored);
+        if (data is Map) {
+          for (final e in data.entries) {
+            if (e.key is String && e.value is String) _tokens[e.key as String] = e.value as String;
+          }
+        }
+      }
+      _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 8788);
+      online.value = true;
+      _server!.listen((request) async {
+        final res = request.response;
+        res.headers.set('Cache-Control', 'no-store');
+        res.headers.contentType = ContentType.json;
+        // Chrome extension fetch() may omit Origin on same-context requests.
+        // The extension identifies itself with a custom header. Browser pages
+        // cannot send this header unless their CORS preflight is approved.
+        final browserOrigin = request.headers.value('origin') ?? '';
+        final claimedId = request.headers.value('X-FootageFlow-Extension-Id') ?? '';
+        final validId = RegExp(r'^[a-p]{32}$').hasMatch(claimedId);
+        final claimedOrigin = validId ? 'chrome-extension://$claimedId' : '';
+        final origin = browserOrigin.isEmpty ? claimedOrigin : browserOrigin;
+        final allowed = validId && origin == claimedOrigin;
+        if (allowed) {
+          res.headers.set('Access-Control-Allow-Origin', origin);
+          res.headers.set('Vary', 'Origin');
+          res.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+          res.headers.set('Access-Control-Allow-Headers', 'Content-Type, X-FootageFlow-Token, X-FootageFlow-Extension-Id');
+        }
+        void reply(int code, Map<String, dynamic> data) { res.statusCode = code; res.write(jsonEncode(data)); }
+        if (!allowed) { reply(403, {'error':'Forbidden'}); await res.close(); return; }
+        if (request.method == 'OPTIONS') { res.statusCode = 204; await res.close(); return; }
+        final path = request.uri.path;
+        final token = request.headers.value('X-FootageFlow-Token');
+        final authenticated = _tokens[origin] != null && _tokens[origin] == token;
+        if (path == '/status' && request.method == 'GET') {
+          reply(200, {'connected': authenticated});
+        } else if (path == '/pair/request' && request.method == 'POST') {
+          if (authenticated) { reply(200, {'status':'connected'}); }
+          else {
+            final last = _requestedAt[origin];
+            if (last == null || DateTime.now().difference(last).inSeconds > 30) {
+              _pending[origin] = _secret();
+              _requestedAt[origin] = DateTime.now();
+              pairingRequest.value = origin;
+            }
+            reply(200, {'status':'pending'});
+          }
+        } else if (path == '/pair/status' && request.method == 'GET') {
+          // Pairing credential is only handed to the extension ID approved by the user.
+          if (_tokens.containsKey(origin) && !_pending.containsKey(origin)) {
+            reply(200, {'status':'connected','token':_tokens[origin]});
+          } else if (_pending.containsKey(origin)) {
+            reply(200, {'status':'pending'});
+          } else { reply(200, {'status':'unpaired'}); }
+        } else if (path == '/inbox' && request.method == 'POST' && authenticated) {
+          try {
+            final body = await utf8.decoder.bind(request).join();
+            if (body.length > 4096) throw const FormatException('Too large');
+            final data = jsonDecode(body);
+            if (data is! Map || data['url'] is! String) throw const FormatException('Invalid data');
+            final url = (data['url'] as String).trim();
+            final uri = Uri.tryParse(url);
+            if (uri == null || !['http','https'].contains(uri.scheme) || uri.host.isEmpty || uri.userInfo.isNotEmpty || url.length > 2048) throw const FormatException('Invalid URL');
+            incomingUrl.value = url;
+            reply(200, {'ok':true});
+          } catch (_) { reply(400, {'error':'Invalid link'}); }
+        } else { reply(403, {'error':'Not paired'}); }
+        await res.close();
+      });
+    } catch (_) { online.value = false; }
+  }
+  static Future<void> stop() async { await _server?.close(force:true); _server=null; online.value=false; }
+}
+
 final ValueNotifier<int> footageFlowTourRequests = ValueNotifier<int>(0);
 
 class AppShell extends StatefulWidget {
@@ -516,13 +674,33 @@ class _AppShellState extends State<AppShell> {
     downloadManager = DownloadManager(libraryStore);
     footageFlowTourRequests.addListener(_restartTour);
     _load();
+    FootageFlowChromeBridge.incomingUrl.addListener(_receiveChromeUrl);
+    FootageFlowChromeBridge.pairingRequest.addListener(_onChromePairing);
   }
+
+  void _onChromePairing() {
+    final origin = FootageFlowChromeBridge.pairingRequest.value;
+    if (origin == null || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || FootageFlowChromeBridge.pairingRequest.value != origin) return;
+      final accepted = await showDialog<bool>(context: context, barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Connect Chrome extension?'),
+          content: Text('A Chrome extension is requesting access to send video links to FootageFlow.\n\nExtension ID: ${origin.replaceFirst('chrome-extension://', '')}\n\nOnly approve if you just requested this connection in Chrome.'),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Reject')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Allow connection'))]));
+      if (accepted == true) { await FootageFlowChromeBridge.approve(origin); }
+      else { FootageFlowChromeBridge.reject(origin); }
+    });
+  }
+
+  void _receiveChromeUrl() { if (FootageFlowChromeBridge.incomingUrl.value != null && mounted) { setState(() { index = 2; openedProject = null; }); WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) unawaited(FootageFlowWindowFocus.activate()); }); } }
 
   void _restartTour() { if (mounted) setState(() { tourStep = 0; tourVisible = true; index = 0; openedProject = null; }); }
   Future<void> _selectFirstLanguage(String code) async { final prefs = await SharedPreferences.getInstance(); await prefs.setString("footageflow_language_v1", code); footageFlowLanguage.value = code; if (mounted) setState(() { languagePickerVisible = false; tourVisible = !(prefs.getBool("footageflow_tour_completed_v1") ?? false); }); }
   Future<void> _endTour() async { final prefs = await SharedPreferences.getInstance(); await prefs.setBool('footageflow_tour_completed_v1', true); if (mounted) setState(() => tourVisible = false); }
   void _nextTour() { if (tourStep == 5) { _endTour(); return; } setState(() { tourStep++; index = [0,1,2,3,6,0][tourStep]; openedProject = null; }); }
-  @override void dispose() { footageFlowTourRequests.removeListener(_restartTour); super.dispose(); }
+  @override void dispose() { footageFlowTourRequests.removeListener(_restartTour); FootageFlowChromeBridge.incomingUrl.removeListener(_receiveChromeUrl); FootageFlowChromeBridge.pairingRequest.removeListener(_onChromePairing); FootageFlowChromeBridge.stop(); super.dispose(); }
 
   Future<void> _load() async {
     projects = await ProjectStore.load();
@@ -530,6 +708,7 @@ class _AppShellState extends State<AppShell> {
     DownloaderEngine.configuredYtDlpPath = await AppSettingsStore.loadYtDlpPath();
     await libraryStore.load();
     await downloadManager.loadHistory();
+    await FootageFlowChromeBridge.start();
     final prefs = await SharedPreferences.getInstance();
     final savedLanguage = prefs.getString('footageflow_language_v1');
     footageFlowLanguage.value = savedLanguage == 'fa' ? 'fa' : 'en';
@@ -708,6 +887,135 @@ class ProjectsPage extends StatefulWidget {
 }
 class _ProjectsPageState extends State<ProjectsPage>{
   String query=''; bool selecting=false; final Set<String> selected={};
+  Future<void> _editProject(ProjectModel project) async {
+    final name = TextEditingController(text: project.name);
+    final location = TextEditingController(text: Directory(project.path).absolute.parent.path);
+    final result = await showDialog<(String, String)>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(builder: (context, refresh) => AlertDialog(
+        title: const Text('Edit project'),
+        content: SizedBox(width: 470, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: name, enabled: true, decoration: const InputDecoration(labelText: 'Project name')),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: TextField(controller: location, enabled: true, decoration: const InputDecoration(labelText: 'Save location (parent folder)', hintText: 'Folder containing the project'))),
+            IconButton(tooltip: 'Browse folder', onPressed: () async {
+              final chosen = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose project save location');
+              if (chosen != null) location.text = chosen;
+            }, icon: const Icon(Icons.folder_open_outlined)),
+          ]),
+          const SizedBox(height: 12),
+          const Text('The project folder will match its name. Renaming or changing location moves all files; existing destinations are never overwritten.', style: TextStyle(fontSize: 12, color: Color(0xFF858C9C))),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, (name.text.trim(), location.text.trim())), child: const Text('Save')),
+        ],
+      )),
+    );
+    name.dispose(); location.dispose();
+    if (result == null) return;
+    if (result.$1.isEmpty || result.$2.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Project name and save location are required.')));
+      return;
+    }
+    if (widget.projects.any((p) => p.id != project.id && p.name.toLowerCase() == result.$1.toLowerCase())) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A project with that name already exists.')));
+      return;
+    }
+    // Save location is the parent directory. The project folder follows its name.
+    final newName = result.$1.trim();
+    if (newName == '.' || newName == '..' ||
+        RegExp(r'[<>:"/\\|?*]').hasMatch(newName) ||
+        newName.endsWith('.') || newName.endsWith(' ')) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid Windows folder name.')));
+      return;
+    }
+    final parent = Directory(result.$2).absolute;
+    final newPath = '${parent.path}${Platform.pathSeparator}$newName';
+    final oldPath = Directory(project.path).absolute.path;
+    final changed = newPath.toLowerCase() != oldPath.toLowerCase();
+    final updatedProject = ProjectModel(
+      id: project.id, name: newName,
+      path: changed ? newPath : project.path,
+      createdAt: project.createdAt, source: project.source);
+    if (changed) {
+      try {
+        await _moveProjectSafely(project.path, newPath);
+      } catch (error) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Project was not moved: $error')));
+        return;
+      }
+    }
+    try {
+      // Keep library paths and project metadata in sync.
+      if (changed) {
+        await widget.libraryStore.relocateProject(project, updatedProject);
+      } else {
+        await widget.libraryStore.renameProject(project.id, newName);
+      }
+      final updated = widget.projects
+          .map((p) => p.id == project.id ? updatedProject : p).toList();
+      await widget.onProjectsChanged(updated);
+      if (changed) {
+        try {
+          await Directory(project.path).delete(recursive: true);
+        } catch (_) {
+          // Original remains as a safe backup if Windows blocks deletion.
+        }
+      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Project updated successfully.')));
+    } catch (error) {
+      // Never delete the original if updating metadata fails.
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Original folder preserved. Could not update project records: $error')));
+    }
+  }
+
+  Future<void> _moveProjectSafely(String from, String to) async {
+    final source = Directory(from).absolute;
+    final target = Directory(to).absolute;
+    String normalized(String path) => path.replaceAll('\\', '/').replaceAll(RegExp(r'/+$'), '').toLowerCase();
+    final src = normalized(source.path), dst = normalized(target.path);
+    if (src == dst) return;
+    if (dst.startsWith('$src/') || src.startsWith('$dst/')) throw StateError('Destination cannot be inside the source folder or its parent.');
+    if (!await source.exists()) throw StateError('Source project folder does not exist.');
+    if (await File(target.path).exists() || await target.exists()) throw StateError('Destination already exists. Choose an empty, unused folder path.');
+    final parent = target.parent;
+    if (!await parent.exists()) throw StateError('Destination parent folder does not exist.');
+    // Copy to a temporary sibling first; the original is untouched until verification.
+    final staging = Directory('${target.path}.footageflow-moving-${DateTime.now().microsecondsSinceEpoch}');
+    try {
+      await _copyDirectory(source, staging);
+      Future<Map<String, int>> manifest(Directory dir) async {
+        final result = <String, int>{};
+        await for (final entity in dir.list(recursive: true, followLinks: false)) {
+          final relative = entity.path.substring(dir.path.length);
+          if (entity is File) result[relative] = await entity.length();
+          else if (entity is Directory) result['$relative/'] = -1;
+          else throw StateError('Unsupported file type in project: $relative');
+        }
+        return result;
+      }
+      final original = await manifest(source);
+      final copied = await manifest(staging);
+      if (original.length != copied.length || original.entries.any((e) => copied[e.key] != e.value)) {
+        throw StateError('Verification failed; original files were kept.');
+      }
+      if (await target.exists()) throw StateError('Destination appeared during transfer.');
+      await staging.rename(target.path);
+      // Do not delete the original until project and library records are saved.
+    } catch (_) {
+      if (await staging.exists()) {
+        try { await staging.delete(recursive: true); } catch (_) {}
+      }
+      rethrow;
+    }
+  }
   Future<void> _copyDirectory(Directory source,Directory target) async { await target.create(recursive:true); await for(final entity in source.list(recursive:false,followLinks:false)){ final name=entity.path.split(Platform.pathSeparator).last; final dest='${target.path}${Platform.pathSeparator}$name'; if(entity is Directory) await _copyDirectory(entity,Directory(dest)); else if(entity is File) await entity.copy(dest); } }
   Future<void> _moveSelected() async {
     if(selected.isEmpty)return; final base=await FilePicker.platform.getDirectoryPath(dialogTitle:'Move selected projects to...'); if(base==null||!mounted)return;
@@ -718,7 +1026,7 @@ class _ProjectsPageState extends State<ProjectsPage>{
       try{
         final src=Directory(old.path); if(!await src.exists()){failures.add('${old.name}: source folder missing');continue;}
         try{await src.rename(destPath);}catch(_){await _copyDirectory(src,Directory(destPath));await src.delete(recursive:true);}
-        final np=ProjectModel(id:old.id,name:old.name,path:destPath,createdAt:old.createdAt); updated[idx]=np; await widget.libraryStore.relocateProject(old,np); moved++;
+        final np=ProjectModel(id:old.id,name:old.name,path:destPath,createdAt:old.createdAt,source:old.source); updated[idx]=np; await widget.libraryStore.relocateProject(old,np); moved++;
       }catch(e){failures.add('${old.name}: $e');}
     }
     await widget.onProjectsChanged(updated); if(!mounted)return; setState((){selected.clear();selecting=false;});
@@ -739,7 +1047,7 @@ class _ProjectsPageState extends State<ProjectsPage>{
       LayoutBuilder(builder:(context,c){final compact=c.maxWidth<760;final title=const Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Projects',maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(fontSize:28,fontWeight:FontWeight.w800)),SizedBox(height:5),Text('Everything you collect stays organized by edit.',maxLines:2,overflow:TextOverflow.ellipsis,style:TextStyle(color:Color(0xFF8F96A6)))]);final actions=Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:!selecting?[OutlinedButton.icon(onPressed:(){setState(()=>selecting=true);},icon:const Icon(Icons.checklist_rounded),label:const Text('Select')),FilledButton.icon(onPressed:widget.onNewProject,icon:const Icon(Icons.add_rounded),label:const Text('New project'))]:[Text('${selected.length} selected',style:const TextStyle(color:Color(0xFF8B5CF6),fontWeight:FontWeight.w700)),OutlinedButton.icon(onPressed:selected.isEmpty?null:_moveSelected,icon:const Icon(Icons.drive_file_move_outline),label:const Text('Move')),OutlinedButton.icon(onPressed:selected.isEmpty?null:_deleteSelected,icon:const Icon(Icons.delete_outline_rounded),label:const Text('Delete')),TextButton(onPressed:()=>setState((){selected.clear();selecting=false;}),child:const Text('Done'))]);return compact?Column(crossAxisAlignment:CrossAxisAlignment.start,children:[title,const SizedBox(height:12),Align(alignment:Alignment.centerRight,child:actions)]):Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:title),const SizedBox(width:24),Align(alignment:Alignment.topRight,child:actions)]);}),
       const SizedBox(height:20),TextField(onChanged:(v)=>setState(()=>query=v),decoration:InputDecoration(prefixIcon:Icon(Icons.search_rounded),hintText:ffTranslate('Search projects by name or path...'))),const SizedBox(height:20),
       if(selecting) Padding(padding:const EdgeInsets.only(bottom:12),child:Row(children:[TextButton.icon(onPressed:()=>setState((){final ids=shown.map((e)=>e.id).toSet();if(ids.every(selected.contains)){selected.removeAll(ids);}else{selected.addAll(ids);}}),icon:const Icon(Icons.select_all_rounded),label:Text(shown.isNotEmpty&&shown.every((p)=>selected.contains(p.id))?'Clear visible':'Select all visible'))])),
-      Expanded(child:widget.projects.isEmpty?EmptyProjects(onNewProject:widget.onNewProject):shown.isEmpty?const Center(child:Text('No projects found',style:TextStyle(color:Color(0xFF8F96A6)))):SingleChildScrollView(child:Wrap(spacing:14,runSpacing:14,children:shown.map((p)=>ProjectCard(project:p,libraryStore:widget.libraryStore,selected:selecting&&selected.contains(p.id),selectionMode:selecting,onTap:(){if(selecting){setState((){if(!selected.add(p.id))selected.remove(p.id);});}else{widget.onOpenProject(p);}})).toList())))
+      Expanded(child:widget.projects.isEmpty?EmptyProjects(onNewProject:widget.onNewProject):shown.isEmpty?const Center(child:Text('No projects found',style:TextStyle(color:Color(0xFF8F96A6)))):SingleChildScrollView(child:Wrap(spacing:14,runSpacing:14,children:shown.map((p)=>ProjectCard(project:p,libraryStore:widget.libraryStore,selected:selecting&&selected.contains(p.id),selectionMode:selecting,onEdit:()=>_editProject(p),onTap:(){if(selecting){setState((){if(!selected.add(p.id))selected.remove(p.id);});}else{widget.onOpenProject(p);}})).toList())))
     ]));
   }
 }
@@ -747,8 +1055,8 @@ class _ProjectsPageState extends State<ProjectsPage>{
 class ProjectCard extends StatelessWidget {
   final ProjectModel project;
   final LibraryStore libraryStore;
-  final VoidCallback onTap; final bool selectionMode; final bool selected;
-  const ProjectCard({super.key, required this.project, required this.libraryStore, required this.onTap, this.selectionMode=false, this.selected=false});
+  final VoidCallback onTap; final VoidCallback? onEdit; final bool selectionMode; final bool selected;
+  const ProjectCard({super.key, required this.project, required this.libraryStore, required this.onTap, this.onEdit, this.selectionMode=false, this.selected=false});
 
   @override
   Widget build(BuildContext context) {
@@ -766,6 +1074,7 @@ class ProjectCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if(!selectionMode) Align(alignment:Alignment.centerRight,child:IconButton(tooltip:"Edit project",onPressed:onEdit,icon:const Icon(Icons.edit_outlined,size:19))),
                 if(selectionMode) Align(alignment:Alignment.centerRight,child:Icon(selected?Icons.check_circle_rounded:Icons.radio_button_unchecked_rounded,color:selected?const Color(0xFF8B5CF6):const Color(0xFF858C9C))),
                 Container(
                   width: 46,
@@ -779,6 +1088,7 @@ class ProjectCard extends StatelessWidget {
                 const SizedBox(height: 18),
                 Text(project.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 7),
+                if(project.source.isNotEmpty) Text(project.source,maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Color(0xFF22D3EE),fontSize:12)),
                 Text(project.path, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF858C9C), fontSize: 12)),
                 const SizedBox(height: 18),
                 Row(children: [
@@ -904,7 +1214,7 @@ class _ProjectDetailPageState extends State<ProjectDetailPage> {
 
   Future<void> addCollection() async { final c=TextEditingController(); final name=await showDialog<String>(context:context,builder:(d)=>AlertDialog(title:const Text('New collection'),content:TextField(controller:c,autofocus:true,decoration:InputDecoration(hintText:ffTranslate('Jets, Smoke, Fight...'))),actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,c.text.trim()),child:const Text('Create'))])); c.dispose(); if(name!=null&&name.isNotEmpty) await widget.libraryStore.addCollection(widget.project.id,name); }
   Future<void> collectionMenu(String name,Offset pos) async { final overlay=Overlay.of(context).context.findRenderObject() as RenderBox; final v=await showMenu<String>(context:context,position:RelativeRect.fromRect(Rect.fromPoints(pos,pos),Offset.zero&overlay.size),items:const [PopupMenuItem(value:'rename',child:ListTile(leading:Icon(Icons.edit_rounded),title:Text('Rename collection'),dense:true,contentPadding:EdgeInsets.zero)),PopupMenuItem(value:'delete',child:ListTile(leading:Icon(Icons.delete_outline_rounded,color:Color(0xFFFF6B6B)),title:Text('Delete collection',style:TextStyle(color:Color(0xFFFF6B6B))),dense:true,contentPadding:EdgeInsets.zero))]); if(!mounted)return; if(v=='rename'){final c=TextEditingController(text:name);final n=await showDialog<String>(context:context,builder:(d)=>AlertDialog(title:const Text('Rename collection'),content:TextField(controller:c,autofocus:true),actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,c.text.trim()),child:const Text('Rename'))]));c.dispose();if(n!=null&&n.isNotEmpty){await widget.libraryStore.renameCollection(widget.project.id,name,n);if(selectedCollection==name)setState(()=>selectedCollection=n);}} if(v=='delete'){final ok=await showDialog<bool>(context:context,builder:(d)=>AlertDialog(title:const Text('Delete collection?'),content:Text('Footage inside “$name” will become Unsorted. Files will not be deleted.'),actions:[TextButton(onPressed:()=>Navigator.pop(d,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,true),style:FilledButton.styleFrom(backgroundColor:const Color(0xFFFF5C5C)),child:const Text('Delete'))]))??false;if(ok){await widget.libraryStore.deleteCollection(widget.project.id,name);if(selectedCollection==name)setState(()=>selectedCollection=null);}} }
-  @override Widget build(BuildContext context)=>AnimatedBuilder(animation:widget.libraryStore,builder:(_,__) { final all=widget.libraryStore.items.where((e)=>e.projectId==widget.project.id).toList(); final cols=widget.libraryStore.collectionsFor(widget.project.id); final collectionItems=selectedCollection==null?all:all.where((e)=>e.collection==selectedCollection).toList(); final q=_projectSearch.trim().toLowerCase(); final items=q.isEmpty?collectionItems:collectionItems.where((e)=>e.title.toLowerCase().contains(q)||e.formatLabel.toLowerCase().contains(q)||(e.collection??'').toLowerCase().contains(q)||e.filePath.split(Platform.pathSeparator).last.toLowerCase().contains(q)).toList(); return DropTarget(onDragEntered:(_)=>setState(()=>_dropHover=true),onDragExited:(_)=>setState(()=>_dropHover=false),onDragDone:(d)=>_importDroppedFiles(d.files),child:Stack(children:[Padding(padding:const EdgeInsets.all(28),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[LayoutBuilder(builder:(context,c){final compact=c.maxWidth<820;final info=Row(crossAxisAlignment:CrossAxisAlignment.start,children:[IconButton(onPressed:widget.onBack,icon:const Icon(Icons.arrow_back_rounded)),const SizedBox(width:8),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.project.name,maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontSize:28,fontWeight:FontWeight.w800)),Text(widget.project.path,maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Color(0xFF858C9C)))]))]);final allVisibleSelected=items.isNotEmpty&&items.every((e)=>selected.contains(e.id));final actions=Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:selectionMode?[Text('${selected.length} selected',style:const TextStyle(fontWeight:FontWeight.w700)),OutlinedButton.icon(onPressed:items.isEmpty?null:()=>setState((){if(allVisibleSelected){selected.removeAll(items.map((e)=>e.id));}else{selected.addAll(items.map((e)=>e.id));}}),icon:Icon(allVisibleSelected?Icons.deselect_rounded:Icons.select_all_rounded),label:Text(allVisibleSelected?'Clear all':'Select all')),FilledButton.icon(onPressed:selected.isEmpty?null:moveSelected,icon:const Icon(Icons.drive_file_move_rounded),label:const Text('Move')),OutlinedButton.icon(onPressed:selected.isEmpty?null:shareSelected,icon:const Icon(Icons.ios_share_rounded),label:const Text('Share')),OutlinedButton.icon(onPressed:selected.isEmpty?null:deleteSelected,icon:const Icon(Icons.delete_outline_rounded,color:Color(0xFFFF6B6B)),label:const Text('Delete',style:TextStyle(color:Color(0xFFFF6B6B)))),OutlinedButton(onPressed:clearSelection,child:const Text('Cancel'))]:[OutlinedButton.icon(onPressed:()=>setState(()=>selectionMode=true),icon:const Icon(Icons.checklist_rounded),label:const Text('Select')),OutlinedButton.icon(onPressed:()=>Process.run('explorer.exe',[widget.project.path]),icon:const Icon(Icons.folder_open_rounded),label:const Text('Open folder'))]);return compact?Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[info,const SizedBox(height:12),actions]):Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:info),const SizedBox(width:16),Flexible(child:Align(alignment:Alignment.topRight,child:actions))]);}),const SizedBox(height:24),LayoutBuilder(builder:(context,c){final compact=c.maxWidth<700;final count=Text('${all.length} footage${all.length==1?'':'s'}',style:const TextStyle(color:Color(0xFF8F96A6)));final searchField=TextField(controller:_projectSearchController,onChanged:(v)=>setState(()=>_projectSearch=v),decoration:InputDecoration(isDense:true,prefixIcon:const Icon(Icons.search_rounded,size:20),hintText:ffTranslate('Search this project...'),suffixIcon:_projectSearch.isEmpty?null:IconButton(tooltip:ffTranslate('Clear'),onPressed:(){_projectSearchController.clear();setState(()=>_projectSearch='');},icon:const Icon(Icons.close_rounded,size:18))));final add=FilledButton.icon(onPressed:addCollection,icon:const Icon(Icons.add_rounded),label:const Text('New collection'));return compact?Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[count,const SizedBox(height:10),searchField,const SizedBox(height:10),Align(alignment:Alignment.centerLeft,child:add)]):Row(children:[count,const SizedBox(width:18),Expanded(child:searchField),const SizedBox(width:18),add]);}),const SizedBox(height:16),Wrap(spacing:10,runSpacing:10,children:[_CollectionChip(label:'All',count:all.length,selected:selectedCollection==null,onTap:()=>setState(()=>selectedCollection=null)),...cols.map((c)=>_CollectionChip(label:c,count:all.where((e)=>e.collection==c).length,selected:selectedCollection==c,onTap:()=>setState(()=>selectedCollection=c),onSecondaryTap:(p)=>collectionMenu(c,p)))]),const SizedBox(height:20),Expanded(child:items.isEmpty?Center(child:Text(selectedCollection==null?'Downloaded footage for this project will appear here.':'No footage in $selectedCollection yet.',style:const TextStyle(color:Color(0xFF858C9C)))):LibraryGrid(items:items,store:widget.libraryStore,projects:widget.projects,selectionMode:selectionMode,selected:selected,onToggle:toggleSelection))])),if(_dropHover)Positioned.fill(child:IgnorePointer(child:Container(decoration:BoxDecoration(color:Theme.of(context).colorScheme.primary.withValues(alpha:.10),border:Border.all(color:Theme.of(context).colorScheme.primary,width:2),borderRadius:BorderRadius.circular(18)),child:Center(child:Container(padding:const EdgeInsets.symmetric(horizontal:24,vertical:18),decoration:BoxDecoration(color:const Color(0xEE151923),borderRadius:BorderRadius.circular(16),border:Border.all(color:Theme.of(context).colorScheme.primary)),child:Column(mainAxisSize:MainAxisSize.min,children:[Icon(Icons.file_download_rounded,size:38,color:Theme.of(context).colorScheme.primary),const SizedBox(height:8),Text('Drop files into ${widget.project.name}',style:const TextStyle(fontSize:17,fontWeight:FontWeight.w800)),const SizedBox(height:4),const Text('Video • Audio • Image',style:TextStyle(color:Color(0xFF9AA2B2)))]))))))])); });
+  @override Widget build(BuildContext context)=>AnimatedBuilder(animation:widget.libraryStore,builder:(_,__) { final all=widget.libraryStore.items.where((e)=>e.projectId==widget.project.id).toList(); final cols=widget.libraryStore.collectionsFor(widget.project.id); final collectionItems=selectedCollection==null?all:all.where((e)=>e.collection==selectedCollection).toList(); final q=_projectSearch.trim().toLowerCase(); final items=q.isEmpty?collectionItems:collectionItems.where((e)=>e.title.toLowerCase().contains(q)||e.formatLabel.toLowerCase().contains(q)||e.tags.any((t)=>t.toLowerCase().contains(q))||(e.collection??'').toLowerCase().contains(q)||e.filePath.split(Platform.pathSeparator).last.toLowerCase().contains(q)).toList(); return DropTarget(onDragEntered:(_)=>setState(()=>_dropHover=true),onDragExited:(_)=>setState(()=>_dropHover=false),onDragDone:(d)=>_importDroppedFiles(d.files),child:Stack(children:[Padding(padding:const EdgeInsets.all(28),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[LayoutBuilder(builder:(context,c){final compact=c.maxWidth<820;final info=Row(crossAxisAlignment:CrossAxisAlignment.start,children:[IconButton(onPressed:widget.onBack,icon:const Icon(Icons.arrow_back_rounded)),const SizedBox(width:8),Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(widget.project.name,maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontSize:28,fontWeight:FontWeight.w800)),Text(widget.project.path,maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Color(0xFF858C9C)))]))]);final allVisibleSelected=items.isNotEmpty&&items.every((e)=>selected.contains(e.id));final actions=Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:selectionMode?[Text('${selected.length} selected',style:const TextStyle(fontWeight:FontWeight.w700)),OutlinedButton.icon(onPressed:items.isEmpty?null:()=>setState((){if(allVisibleSelected){selected.removeAll(items.map((e)=>e.id));}else{selected.addAll(items.map((e)=>e.id));}}),icon:Icon(allVisibleSelected?Icons.deselect_rounded:Icons.select_all_rounded),label:Text(allVisibleSelected?'Clear all':'Select all')),FilledButton.icon(onPressed:selected.isEmpty?null:moveSelected,icon:const Icon(Icons.drive_file_move_rounded),label:const Text('Move')),OutlinedButton.icon(onPressed:selected.isEmpty?null:shareSelected,icon:const Icon(Icons.ios_share_rounded),label:const Text('Share')),OutlinedButton.icon(onPressed:selected.isEmpty?null:deleteSelected,icon:const Icon(Icons.delete_outline_rounded,color:Color(0xFFFF6B6B)),label:const Text('Delete',style:TextStyle(color:Color(0xFFFF6B6B)))),OutlinedButton(onPressed:clearSelection,child:const Text('Cancel'))]:[OutlinedButton.icon(onPressed:()=>setState(()=>selectionMode=true),icon:const Icon(Icons.checklist_rounded),label:const Text('Select')),OutlinedButton.icon(onPressed:()=>Process.run('explorer.exe',[widget.project.path]),icon:const Icon(Icons.folder_open_rounded),label:const Text('Open folder'))]);return compact?Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[info,const SizedBox(height:12),actions]):Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:info),const SizedBox(width:16),Flexible(child:Align(alignment:Alignment.topRight,child:actions))]);}),const SizedBox(height:24),LayoutBuilder(builder:(context,c){final compact=c.maxWidth<700;final count=Text('${all.length} footage${all.length==1?'':'s'}',style:const TextStyle(color:Color(0xFF8F96A6)));final searchField=TextField(controller:_projectSearchController,onChanged:(v)=>setState(()=>_projectSearch=v),decoration:InputDecoration(isDense:true,prefixIcon:const Icon(Icons.search_rounded,size:20),hintText:ffTranslate('Search this project...'),suffixIcon:_projectSearch.isEmpty?null:IconButton(tooltip:ffTranslate('Clear'),onPressed:(){_projectSearchController.clear();setState(()=>_projectSearch='');},icon:const Icon(Icons.close_rounded,size:18))));final add=FilledButton.icon(onPressed:addCollection,icon:const Icon(Icons.add_rounded),label:const Text('New collection'));return compact?Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[count,const SizedBox(height:10),searchField,const SizedBox(height:10),Align(alignment:Alignment.centerLeft,child:add)]):Row(children:[count,const SizedBox(width:18),Expanded(child:searchField),const SizedBox(width:18),add]);}),const SizedBox(height:16),Wrap(spacing:10,runSpacing:10,children:[_CollectionChip(label:'All',count:all.length,selected:selectedCollection==null,onTap:()=>setState(()=>selectedCollection=null)),...cols.map((c)=>_CollectionChip(label:c,count:all.where((e)=>e.collection==c).length,selected:selectedCollection==c,onTap:()=>setState(()=>selectedCollection=c),onSecondaryTap:(p)=>collectionMenu(c,p)))]),const SizedBox(height:20),Expanded(child:items.isEmpty?Center(child:Text(selectedCollection==null?'Downloaded footage for this project will appear here.':'No footage in $selectedCollection yet.',style:const TextStyle(color:Color(0xFF858C9C)))):LibraryGrid(items:items,store:widget.libraryStore,projects:widget.projects,selectionMode:selectionMode,selected:selected,onToggle:toggleSelection))])),if(_dropHover)Positioned.fill(child:IgnorePointer(child:Container(decoration:BoxDecoration(color:Theme.of(context).colorScheme.primary.withValues(alpha:.10),border:Border.all(color:Theme.of(context).colorScheme.primary,width:2),borderRadius:BorderRadius.circular(18)),child:Center(child:Container(padding:const EdgeInsets.symmetric(horizontal:24,vertical:18),decoration:BoxDecoration(color:const Color(0xEE151923),borderRadius:BorderRadius.circular(16),border:Border.all(color:Theme.of(context).colorScheme.primary)),child:Column(mainAxisSize:MainAxisSize.min,children:[Icon(Icons.file_download_rounded,size:38,color:Theme.of(context).colorScheme.primary),const SizedBox(height:8),Text('Drop files into ${widget.project.name}',style:const TextStyle(fontSize:17,fontWeight:FontWeight.w800)),const SizedBox(height:4),const Text('Video • Audio • Image',style:TextStyle(color:Color(0xFF9AA2B2)))]))))))])); });
 }
 class _CollectionChip extends StatelessWidget { final String label;final int count;final bool selected;final VoidCallback onTap;final void Function(Offset)? onSecondaryTap;const _CollectionChip({required this.label,required this.count,required this.selected,required this.onTap,this.onSecondaryTap});@override Widget build(BuildContext context)=>GestureDetector(onSecondaryTapDown:onSecondaryTap==null?null:(d)=>onSecondaryTap!(d.globalPosition),child:InkWell(onTap:onTap,borderRadius:BorderRadius.circular(20),child:Container(padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),decoration:BoxDecoration(color:selected?Theme.of(context).colorScheme.primary.withValues(alpha:.18):const Color(0xFF13161D),border:Border.all(color:selected?Theme.of(context).colorScheme.primary:const Color(0xFF292E3A)),borderRadius:BorderRadius.circular(20)),child:Text('$label  $count',style:TextStyle(fontSize:12,fontWeight:FontWeight.w600,color:selected?Theme.of(context).colorScheme.primary:null))))); }
 
@@ -920,13 +1230,48 @@ class MediaFormat {
   const MediaFormat({required this.id, required this.label, required this.ext, this.height, this.filesize, required this.hasVideo, required this.hasAudio});
 }
 
+
+Future<String?> _refreshHighQualityThumbnail(LibraryItem item, {bool useVideoFrame = false}) async {
+  final video = File(item.filePath);
+  if (useVideoFrame || (item.sourceUrl ?? '').trim().isEmpty) {
+    if (!await video.exists()) throw StateError('The local video file is missing.');
+    final ff = DownloaderEngine.ffmpegPath;
+    if (ff.isEmpty || !File(ff).existsSync()) throw StateError('FFmpeg is not configured.');
+    final base = '${Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path}${Platform.pathSeparator}FootageCollector${Platform.pathSeparator}thumbnails';
+    await Directory(base).create(recursive: true);
+    final out = '$base${Platform.pathSeparator}${DateTime.now().microsecondsSinceEpoch}_frame.jpg';
+    final r = await Process.run(ff, ['-y','-ss','00:00:01','-i',item.filePath,'-frames:v','1','-q:v','2',out]);
+    if (r.exitCode != 0 || !await File(out).exists()) throw StateError('Could not extract video frame.');
+    return out;
+  }
+  final media = await DownloaderEngine.analyze(item.sourceUrl!);
+  final url = media.thumbnail;
+  if (url == null || url.isEmpty) throw StateError('No thumbnail found at source.');
+  final cached = await _cacheThumbnailLocally(url);
+  if (cached == null) throw StateError('Could not download the source thumbnail.');
+  return cached;
+}
+
+String? _bestThumbnail(Map<String,dynamic> data) {
+  final thumbs=data['thumbnails'];
+  if(thumbs is List){
+    final candidates=thumbs.whereType<Map>().where((t)=>'${t['url']??''}'.startsWith('http')).toList();
+    if(candidates.isNotEmpty){candidates.sort((a,b){
+      num score(Map t){final w=(t['width'] as num?)??0;final h=(t['height'] as num?)??0;return w*h;}
+      final dimensions=score(b).compareTo(score(a)); if(dimensions!=0)return dimensions; return '${b['id']??''}'.compareTo('${a['id']??''}');
+    });return '${candidates.first['url']}';}
+  }
+  return data['thumbnail'] as String?;
+}
+
 class AnalyzedMedia {
   final String id;
   final String title;
   final String? thumbnail;
   final String extractor;
   final List<MediaFormat> formats;
-  const AnalyzedMedia({required this.id, required this.title, required this.thumbnail, required this.extractor, required this.formats});
+  final double? durationSeconds;
+  const AnalyzedMedia({required this.id, required this.title, required this.thumbnail, required this.extractor, required this.formats, this.durationSeconds});
 }
 
 class DownloadTask extends ChangeNotifier {
@@ -960,13 +1305,15 @@ class DownloadTask extends ChangeNotifier {
   String outputMode = 'Video + audio';
   String? clipStart;
   String? clipEnd;
+  List<ClipRange> clipRanges = [];
+  String clipFileMode = 'multi';
   String conflictMode = 'normal';
   DateTime createdAt = DateTime.now();
 
   Map<String,dynamic> toJson()=>{
     'id':id,'title':title,'thumbnail':thumbnail,'projectName':projectName,'folder':folder,'formatLabel':formatLabel,
     'progress':progress,'status':status,'done':done,'failed':failed,'paused':paused,'cancelled':cancelled,'error':error,
-    'sourceUrl':sourceUrl,'logLines':logLines.take(400).toList(),'collection':sourceCollection,'outputMode':outputMode,'clipStart':clipStart,'clipEnd':clipEnd,'conflictMode':conflictMode,'createdAt':createdAt.toIso8601String(),
+    'sourceUrl':sourceUrl,'logLines':logLines.take(400).toList(),'collection':sourceCollection,'outputMode':outputMode,'clipStart':clipStart,'clipEnd':clipEnd,'clipRanges':clipRanges.map((e)=>e.toJson()).toList(),'clipFileMode':clipFileMode,'conflictMode':conflictMode,'createdAt':createdAt.toIso8601String(),
     'format':{'id':sourceFormat.id,'label':sourceFormat.label,'ext':sourceFormat.ext,'height':sourceFormat.height,'filesize':sourceFormat.filesize,'hasVideo':sourceFormat.hasVideo,'hasAudio':sourceFormat.hasAudio}
   };
   static DownloadTask fromJson(Map<String,dynamic> j){
@@ -974,7 +1321,7 @@ class DownloadTask extends ChangeNotifier {
     final f=Map<String,dynamic>.from(j['format'] as Map? ?? const {});
     t.sourceFormat=MediaFormat(id:'${f['id']??''}',label:'${f['label']??''}',ext:'${f['ext']??'mp4'}',height:(f['height'] as num?)?.toInt(),filesize:(f['filesize'] as num?)?.toInt(),hasVideo:f['hasVideo']!=false,hasAudio:f['hasAudio']==true);
     t.sourceUrl='${j['sourceUrl']??''}'; t.logLines.addAll((j['logLines'] as List? ?? const []).map((e)=>'$e')); t.sourceMedia=AnalyzedMedia(id:'',title:t.title,thumbnail:t.thumbnail,extractor:'',formats:[t.sourceFormat]);
-    t.sourceCollection=j['collection'] as String?; t.conflictMode='${j['conflictMode']??'normal'}'; t.outputMode='${j['outputMode']??'Video + audio'}'; t.clipStart=j['clipStart'] as String?; t.clipEnd=j['clipEnd'] as String?;
+    t.sourceCollection=j['collection'] as String?; t.conflictMode='${j['conflictMode']??'normal'}'; t.outputMode='${j['outputMode']??'Video + audio'}'; t.clipStart=j['clipStart'] as String?; t.clipEnd=j['clipEnd'] as String?; t.clipRanges=(j['clipRanges'] as List? ?? const []).map((e)=>ClipRange.fromJson(e)).toList(); t.clipFileMode='${j['clipFileMode']??'multi'}';
     t.progress=(j['progress'] as num?)?.toDouble()??0; t.done=j['done']==true; t.failed=j['failed']==true; t.paused=j['paused']==true; t.cancelled=j['cancelled']==true; t.error=j['error'] as String?; t.status='${j['status']??'Cancelled'}'; t.createdAt=DateTime.tryParse('${j['createdAt']}')??DateTime.now();
     if(!t.done&&!t.failed&&!t.cancelled){t.paused=false;t.cancelled=true;t.status='Interrupted';}
     return t;
@@ -1060,13 +1407,13 @@ class DownloadManager extends ChangeNotifier {
     return '$base${Platform.pathSeparator}Footage Collector';
   }
 
-  Future<void> start({required String url, required MediaFormat format, required AnalyzedMedia media, ProjectModel? project, String? collection, String outputMode = 'Video + audio', String? clipStart, String? clipEnd, String conflictMode = 'normal'}) async {
+  Future<void> start({required String url, required MediaFormat format, required AnalyzedMedia media, ProjectModel? project, String? collection, String outputMode = 'Video + audio', String? clipStart, String? clipEnd, List<ClipRange> clipRanges = const [], String clipFileMode = 'multi', String conflictMode = 'normal'}) async {
     final folder = project != null ? '${project.path}${Platform.pathSeparator}Downloads' : await _defaultDownloadsFolder();
     final task = DownloadTask(
       id: DateTime.now().microsecondsSinceEpoch.toString(), title: media.title, thumbnail: media.thumbnail,
       projectName: project?.name ?? 'Windows Downloads', folder: folder, formatLabel: '${format.label} • ${format.ext.toUpperCase()}',
     );
-    task.sourceUrl = url; task.sourceFormat = format; task.expectedDownloadParts=(outputMode=='Video + audio' && format.hasVideo && !format.hasAudio)?2:1; task.sourceMedia = media; task.sourceProject = project; task.sourceCollection = collection; task.outputMode = outputMode; task.clipStart = clipStart; task.clipEnd = clipEnd; task.conflictMode=conflictMode;
+    task.sourceUrl = url; task.sourceFormat = format; task.expectedDownloadParts=(outputMode=='Video + audio' && format.hasVideo && !format.hasAudio)?2:1; task.sourceMedia = media; task.sourceProject = project; task.sourceCollection = collection; task.outputMode = outputMode; task.clipStart = clipStart; task.clipEnd = clipEnd; task.clipRanges = clipRanges; task.clipFileMode = clipFileMode; task.conflictMode=conflictMode;
     tasks.insert(0, task); await _saveHistory(); notifyListeners();
     await _run(task);
   }
@@ -1084,8 +1431,25 @@ class DownloadManager extends ChangeNotifier {
           }
         }
       }
-      await DownloaderEngine.download(url: task.sourceUrl, format: task.sourceFormat, folder: task.folder, outputMode: task.outputMode, clipStart: task.clipStart, clipEnd: task.clipEnd, conflictMode: task.conflictMode, onLine: task.setStatus, onProcess: (p) => task.process = p);
-      if (!task.paused && !task.cancelled) { task.complete(); await _registerCompleted(task); }
+      await DownloaderEngine.download(url: task.sourceUrl, format: task.sourceFormat, folder: task.folder, outputMode: task.outputMode, clipStart: task.clipStart, clipEnd: task.clipEnd, clipRanges: task.clipRanges, clipFileMode: task.clipFileMode, conflictMode: task.conflictMode, onLine: task.setStatus, onProcess: (p) => task.process = p);
+      if (!task.paused && !task.cancelled) {
+        task.complete();
+        await _registerCompleted(task);
+        if(task.clipRanges.length>1){
+          final dir=Directory(task.folder);
+          if(await dir.exists()){
+            await for(final entity in dir.list()){
+              if(entity is! File)continue;
+              final path=entity.path.toLowerCase();
+              if(!(path.endsWith('.part') || path.endsWith('.ytdl')))continue;
+              try{
+                final modified=await entity.lastModified();
+                if(!modified.isBefore(task.createdAt))await entity.delete();
+              }catch(_){}
+            }
+          }
+        }
+      }
     } catch (e) {
       task.fail(e);
     }
@@ -1099,16 +1463,27 @@ class DownloadManager extends ChangeNotifier {
       for(final path in task.outputPaths){final f=File(path);if(await f.exists())files.add(f);}
       if(files.isEmpty){await for(final e in dir.list()){if(e is File&&!e.path.endsWith('.part')&&!e.path.endsWith('.ytdl')&&e.lastModifiedSync().isAfter(task.createdAt.subtract(const Duration(seconds:2))))files.add(e);}}
       if(files.isEmpty)return;
-      files.sort((a,b)=>b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-      final f=files.first; final size=await f.length();
+      // The output markers are the authoritative result set. Do not include
+      // temporary files or unrelated downloads in the same destination folder.
+      if(task.clipRanges.length>1 && task.clipFileMode=='multi') {
+        final expected=task.outputPaths.where((path)=>File(path).existsSync()).toSet();
+        files.removeWhere((file)=>!expected.contains(file.path));
+      }
+      files.sort((a,b)=>a.path.compareTo(b.path));
+      var clipIndex=0;
+      for(final f in (task.clipRanges.length>1 && task.clipFileMode=='multi' ? files : <File>[files.first])) {
+      clipIndex++;
+
+      final size=await f.length();
       final ext=f.path.split('.').last.toLowerCase();
       const audioExt={'mp3','m4a','aac','wav','flac','ogg','opus','wma'};
       const imageExt={'jpg','jpeg','png','webp','gif','bmp','tif','tiff'};
       final actualType=audioExt.contains(ext)?'Audio':imageExt.contains(ext)?'Image':'Video';
       final actualFormat='$actualType • ${ext.toUpperCase()}';
       final localThumb=actualType=='Video'?await _cacheThumbnailLocally(task.thumbnail,videoPath:f.path):await _cacheThumbnailLocally(task.thumbnail);
-      final item=LibraryItem(id:'${DateTime.now().microsecondsSinceEpoch}',title:task.title,filePath:f.path,projectId:task.sourceProject?.id??'',projectName:task.sourceProject?.name??'Windows Downloads',formatLabel:actualFormat,thumbnail:localThumb,collection:task.sourceCollection,sourceUrl:task.sourceUrl,outputMode:task.outputMode,clipStart:task.clipStart,clipEnd:task.clipEnd,sizeBytes:size,addedAt:DateTime.now());
-      if(task.conflictMode=='replace') await libraryStore.replaceDownloadedItem(item,sourceUrl:task.sourceUrl); else await libraryStore.addItem(item);
+      final item=LibraryItem(id:'${DateTime.now().microsecondsSinceEpoch}',title:task.clipRanges.length>1 ? f.path.split(Platform.pathSeparator).last.replaceFirst(RegExp(r'\.[^.]+$'),'') : task.title,filePath:f.path,projectId:task.sourceProject?.id??'',projectName:task.sourceProject?.name??'Windows Downloads',formatLabel:actualFormat,thumbnail:localThumb,collection:task.sourceCollection,sourceUrl:task.sourceUrl,outputMode:task.outputMode,clipStart:task.clipStart,clipEnd:task.clipEnd,sizeBytes:size,addedAt:DateTime.now());
+      if(task.conflictMode=='replace' && !(task.clipRanges.length>1 && task.clipFileMode=='multi')) await libraryStore.replaceDownloadedItem(item,sourceUrl:task.sourceUrl); else await libraryStore.addItem(item);
+      }
     } catch(_) {}
   }
 
@@ -1155,7 +1530,7 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<void> redownload(DownloadTask old,{ProjectModel? project,String? collection}) async {
-    await start(url:old.sourceUrl,format:old.sourceFormat,media:old.sourceMedia,project:project,collection:collection,outputMode:old.outputMode,clipStart:old.clipStart,clipEnd:old.clipEnd,conflictMode:'normal');
+    await start(url:old.sourceUrl,format:old.sourceFormat,media:old.sourceMedia,project:project,collection:collection,outputMode:old.outputMode,clipStart:old.clipStart,clipEnd:old.clipEnd,clipRanges:old.clipRanges,clipFileMode:old.clipFileMode,conflictMode:'normal');
   }
 }
 
@@ -1240,7 +1615,16 @@ class DownloaderEngine {
     for (final item in raw) {
       final f = Map<String, dynamic>.from(item as Map); final id = '${f['format_id'] ?? ''}'; if (id.isEmpty) continue;
       final vcodec = '${f['vcodec'] ?? 'none'}'; final acodec = '${f['acodec'] ?? 'none'}';
-      final hasVideo = vcodec != 'none'; final hasAudio = acodec != 'none'; if (!hasVideo && !hasAudio) continue;
+      var hasVideo = vcodec != 'none'; var hasAudio = acodec != 'none';
+      if (!hasVideo && !hasAudio) {
+        final formatUrl = f['url'];
+        final extHint = '${f['ext'] ?? ''}'.toLowerCase();
+        final direct = formatUrl is String ? Uri.tryParse(formatUrl) : null;
+        if (direct != null && (direct.scheme == 'https' || direct.scheme == 'http') &&
+            const ['mp4', 'webm', 'mov', 'm4v'].contains(extHint)) {
+          hasVideo = true; hasAudio = true;
+        } else { continue; }
+      }
       final height = (f['height'] as num?)?.toInt(); final ext = '${f['ext'] ?? ''}'; final size = ((f['filesize'] ?? f['filesize_approx']) as num?)?.toInt();
       String label;
       if (hasVideo) { label = height != null ? '${height}p' : '${f['format_note'] ?? 'Video'}'; label += hasAudio ? ' • video + audio' : ' • video'; }
@@ -1248,12 +1632,99 @@ class DownloaderEngine {
       final key = '$label|$ext|$hasAudio'; if (!seen.add(key)) continue;
       formats.add(MediaFormat(id: id, label: label, ext: ext, height: height, filesize: size, hasVideo: hasVideo, hasAudio: hasAudio));
     }
+    // yt-dlp generic/direct-file extractors can return a single top-level media
+    // object without a `formats` array. Do not interpret that as no download.
+    if (formats.isEmpty) {
+      final directUrl = data['url'];
+      final protocol = '${data['protocol'] ?? ''}'.toLowerCase();
+      final ext = '${data['ext'] ?? ''}'.toLowerCase();
+      final parsedDirect = directUrl is String ? Uri.tryParse(directUrl) : null;
+      final isHttp = parsedDirect != null &&
+          (parsedDirect.scheme == 'http' || parsedDirect.scheme == 'https');
+      final isMedia = const ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'mp3', 'm4a', 'aac', 'ogg', 'opus'].contains(ext);
+      final isStream = const ['m3u8', 'm3u8_native', 'http_dash_segments'].contains(protocol);
+      if (isHttp && (isMedia || isStream)) {
+        final isAudio = const ['mp3', 'm4a', 'aac', 'ogg', 'opus'].contains(ext);
+        final height = (data['height'] as num?)?.toInt();
+        final filesize = ((data['filesize'] ?? data['filesize_approx']) as num?)?.toInt();
+        formats.add(MediaFormat(
+          id: 'best',
+          label: isAudio ? 'Original audio' :
+              (height != null ? 'Original quality • ${height}p' : 'Original quality'),
+          ext: ext.isEmpty ? (isStream ? 'mp4' : 'bin') : ext,
+          height: height,
+          filesize: filesize,
+          hasVideo: !isAudio,
+          hasAudio: true,
+        ));
+      }
+    }
     formats.sort((a,b) { if (a.hasVideo != b.hasVideo) return a.hasVideo ? -1 : 1; return (b.height ?? 0).compareTo(a.height ?? 0); });
-    return AnalyzedMedia(id: '${data['id'] ?? ''}', title: '${data['title'] ?? 'Untitled'}', thumbnail: data['thumbnail'] as String?, extractor: '${data['extractor_key'] ?? data['extractor'] ?? 'Website'}', formats: formats);
+    return AnalyzedMedia(id: '${data['id'] ?? ''}', title: '${data['title'] ?? 'Untitled'}', thumbnail: _bestThumbnail(data), extractor: '${data['extractor_key'] ?? data['extractor'] ?? 'Website'}', formats: formats, durationSeconds: (data['duration'] as num?)?.toDouble());
   }
 
-  static Future<void> download({required String url, required MediaFormat format, required String folder, required void Function(String) onLine, void Function(Process)? onProcess, String outputMode = 'Video + audio', String? clipStart, String? clipEnd, String conflictMode = 'normal'}) async {
+  static Future<void> download({required String url, required MediaFormat format, required String folder, required void Function(String) onLine, void Function(Process)? onProcess, String outputMode = 'Video + audio', String? clipStart, String? clipEnd, List<ClipRange> clipRanges = const [], String clipFileMode = 'multi', String conflictMode = 'normal'}) async {
     await ensureYtDlp(status: onLine); await Directory(folder).create(recursive: true);
+    if(clipRanges.length>1){
+      final outputs=<String>[];
+      final stamp=DateTime.now().microsecondsSinceEpoch;
+      for(var i=0;i<clipRanges.length;i++){
+        final part=clipRanges[i];
+        onLine('Clip ${i+1}/${clipRanges.length}: ${part.start} → ${part.end}');
+        final captured=<String>[];
+        await download(url:url,format:format,folder:folder,outputMode:outputMode,
+          clipStart:part.start,clipEnd:part.end,conflictMode:'rename',
+          onProcess:onProcess,onLine:(line){
+            if(line.startsWith('__FC_FILE__')){
+              final path=line.substring('__FC_FILE__'.length).trim();
+              if(path.isNotEmpty)captured.add(path);
+              // Emit final paths only after the file has been renamed below.
+            }else{onLine(line);}
+          });
+        if(captured.isEmpty)throw StateError('Clip ${i+1} produced no output file.');
+        var path=captured.last;
+        if(clipFileMode=='multi'){
+          final original=File(path);
+          final extension=path.contains('.')?path.substring(path.lastIndexOf('.')):'';
+          final stem=path.substring(0,path.length-extension.length);
+          final base=stem.split(Platform.pathSeparator).last;
+          final marker=RegExp(r'\s*\[[^\]]+\]');
+          final cleanBase=base.replaceAll(marker,'').replaceAll(RegExp(r'\.f\d+.*$'),'').trim();
+          final suffix=part.name.trim().isNotEmpty?part.name.trim():'${part.start} to ${part.end}';
+          final safeSuffix=suffix.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1f]'),'_').trim();
+          final candidateStem='${original.parent.path}${Platform.pathSeparator}$cleanBase - $safeSuffix';
+          var candidate='$candidateStem$extension';
+          var counter=2;
+          while(File(candidate).existsSync() && candidate!=path){candidate='$candidateStem ($counter)$extension';counter++;}
+          if(candidate!=path){await original.rename(candidate);path=candidate;}
+          onLine('__FC_FILE__$path');
+        }
+        outputs.add(path);
+      }
+      if(clipFileMode=='single'){
+        await ensureFfmpeg(status:onLine);
+        final ext=outputs.first.split('.').last.toLowerCase();
+        final safeExt=({'mp4','mkv','webm','mov'}.contains(ext))?ext:'mkv';
+        final firstName=outputs.first.split(Platform.pathSeparator).last;
+         final firstStem=firstName.contains('.')?firstName.substring(0,firstName.lastIndexOf('.')):firstName;
+         final cleaned=firstStem.replaceAll(RegExp(r'\.f\d+.*$'),'').replaceAll(RegExp(r'\s*\[[^\]]+\]'),'').trim();
+         final output='${folder}${Platform.pathSeparator}$cleaned - Combined_$stamp.$safeExt';
+        final listFile=File('${Directory.systemTemp.path}${Platform.pathSeparator}ff_concat_$stamp.txt');
+        try{
+          // The segments originate from one source and normally share codecs.
+          await listFile.writeAsString(outputs.map((e)=>"file '${e.replaceAll('\\','/').replaceAll("'", "'\\''")}'").join('\n'));
+          final proc=await Process.start(ffmpegPath,['-hide_banner','-y','-f','concat','-safe','0','-i',listFile.path,'-c','copy',output],runInShell:false);
+          onProcess?.call(proc);
+          final stderr=proc.stderr.transform(const Utf8Decoder(allowMalformed:true)).transform(const LineSplitter()).listen(onLine).asFuture<void>();
+          final stdout=proc.stdout.drain<void>();
+          final code=await proc.exitCode; await Future.wait([stderr,stdout]);
+          if(code!=0)throw StateError('FFmpeg could not combine the clips (exit $code).');
+          for(final path in outputs){try{await File(path).delete();}catch(_){}}
+          onLine('__FC_FILE__$output');
+        }finally{if(await listFile.exists())await listFile.delete();}
+      }
+      return;
+    }
     var selector = format.id;
     final args = ['--no-playlist', '--newline', '--progress', '--verbose', '--windows-filenames', '--encoding','utf-8', '--socket-timeout','45','--retries','3','--fragment-retries','3','--extractor-retries','3','--print', 'after_move:__FC_FILE__%(filepath)s'];
     if(conflictMode=='replace') args.add('--force-overwrites');
@@ -1284,6 +1755,14 @@ class DownloaderEngine {
       // make FFmpeg do extra work or fail depending on the selected codecs.
       final mergeExt = format.ext.toLowerCase() == 'webm' ? 'webm' : 'mp4';
       args.addAll(['--merge-output-format', mergeExt]);
+    }
+    if (isClip && outputMode == 'Video + audio' && format.hasVideo && !format.hasAudio) {
+      // yt-dlp section downloads use FFmpeg as an external downloader. When
+      // selecting separate video+audio streams, FFmpeg's section handling can
+      // silently produce video-only fragments. Prefer a muxed A/V source for
+      // clip extraction; retain separate-stream fallback where unavailable.
+      selector = 'best[acodec!=none][vcodec!=none]/${format.id}+bestaudio/best';
+      onLine('Clip audio: prefer a source containing both video and audio.');
     }
     final downloadUri=Uri.tryParse(url);
     final downloadHost=(downloadUri?.host??'').toLowerCase();
@@ -1346,6 +1825,19 @@ class DownloaderEngine {
   }
 }
 
+class ClipRange {
+  final String start, end, name;
+  const ClipRange(this.start, this.end, [this.name = '']);
+  Map<String,dynamic> toJson()=>{'start':start,'end':end,'name':name};
+  static ClipRange fromJson(dynamic j)=>ClipRange('${j['start']??''}','${j['end']??''}','${j['name']??''}');
+}
+
+class ClipRangeEditor {
+  final TextEditingController start, end, name;
+  ClipRangeEditor([String a='00:00:00',String b='00:00:10']):start=TextEditingController(text:a),end=TextEditingController(text:b),name=TextEditingController();
+  void dispose(){start.dispose();end.dispose();name.dispose();}
+}
+
 class UniversalDownloaderPage extends StatefulWidget {
   final List<ProjectModel> projects; final DownloadManager downloadManager;
   const UniversalDownloaderPage({super.key, required this.projects, required this.downloadManager});
@@ -1357,9 +1849,16 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
   AnalyzedMedia? media; ProjectModel? project; MediaFormat? selected;
   String? collection;
   bool clipMode = false; String outputMode = 'Video + audio';
+  bool get _isDirectOriginal => media != null && media!.formats.length == 1 && media!.formats.first.label.startsWith('Original');
   final clipStartController = TextEditingController(text: '00:00:00');
   final clipEndController = TextEditingController(text: '00:00:10');
-  @override void initState() { super.initState(); _restoreRecentProject(); }
+  final clipNameController = TextEditingController();
+  final List<ClipRangeEditor> extraClips=[];
+  String clipFileMode='multi';
+  void _refreshClipValidation(){if(mounted)setState((){});}
+  @override void initState() { super.initState(); clipStartController.addListener(_refreshClipValidation); clipEndController.addListener(_refreshClipValidation); _restoreRecentProject(); FootageFlowChromeBridge.incomingUrl.addListener(_acceptChromeUrl); WidgetsBinding.instance.addPostFrameCallback((_) => _acceptChromeUrl()); }
+  void _acceptChromeUrl() { final url = FootageFlowChromeBridge.incomingUrl.value; if (!mounted || url == null) return; FootageFlowChromeBridge.incomingUrl.value = null; controller.text = url; if (!analyzing) { analyze(); } else { _pendingChromeUrl = url; } }
+  String? _pendingChromeUrl;
   Future<void> _restoreRecentProject() async {
     final id = await AppSettingsStore.loadRecentProject();
     if (!mounted || id == null) return;
@@ -1371,7 +1870,7 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
     setState(() { project = value; collection = null; });
     await AppSettingsStore.saveRecentProject(value?.id);
   }
-  @override void dispose() { controller.dispose(); clipStartController.dispose(); clipEndController.dispose(); super.dispose(); }
+  @override void dispose() { FootageFlowChromeBridge.incomingUrl.removeListener(_acceptChromeUrl); controller.dispose(); clipStartController.removeListener(_refreshClipValidation); clipEndController.removeListener(_refreshClipValidation); clipStartController.dispose(); clipEndController.dispose(); clipNameController.dispose(); for(final e in extraClips){e.dispose();} super.dispose(); }
 
   Future<void> analyze() async {
     final url = controller.text.trim(); final uri = Uri.tryParse(url);
@@ -1382,7 +1881,7 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
       if (!mounted) return;
       setState(() { media = result; selected = result.formats.where((f) => f.hasVideo && f.hasAudio).firstOrNull ?? result.formats.firstOrNull; status = '${result.formats.length} formats found.'; });
     } catch (e) { if (mounted) setState(() => status = e.toString().replaceFirst('Exception: ', '')); }
-    finally { if (mounted) setState(() => analyzing = false); }
+    finally { if (mounted) { setState(() => analyzing = false); final pending = _pendingChromeUrl; _pendingChromeUrl = null; if (pending != null) { controller.text = pending; analyze(); } } }
   }
 
   int? _timeToSeconds(String value) {
@@ -1394,13 +1893,34 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
     return nums[0]!;
   }
 
+  String _formatDuration(double seconds) {
+    final t=seconds.floor();
+    return '${(t ~/ 3600).toString().padLeft(2,'0')}:${((t ~/ 60)%60).toString().padLeft(2,'0')}:${(t%60).toString().padLeft(2,'0')}';
+  }
+  String? get _clipValidation {
+    if(!clipMode || media==null)return null;
+    final pairs=<List<String>>[[clipStartController.text,clipEndController.text],...extraClips.map((e)=>[e.start.text,e.end.text])];
+    for(var i=0;i<pairs.length;i++){
+      final a=_timeToSeconds(pairs[i][0]),b=_timeToSeconds(pairs[i][1]);
+      if(a==null||b==null||a<0||b<=a)return 'Clip ${i+1}: invalid start/end time.';
+      final duration=media!.durationSeconds;
+      if(duration!=null && b>duration+0.25)return 'Clip ${i+1}: end exceeds video duration (${_formatDuration(duration)}).';
+    }
+    return null;
+  }
+
   Future<void> download() async {
     final f = selected; final p = project; final m = media; if (m == null || f == null) return;
+    final invalid=_clipValidation; if(invalid!=null){setState(()=>status=invalid);return;}
     String? start, end;
+    final ranges=<ClipRange>[];
     if (clipMode) {
       start = clipStartController.text.trim(); end = clipEndController.text.trim();
       final a = _timeToSeconds(start), b = _timeToSeconds(end);
       if (a == null || b == null || b <= a) { setState(() => status = 'Clip time is invalid. Use HH:MM:SS and make End later than Start.'); return; }
+      if (m.durationSeconds != null && b > m.durationSeconds! + 0.25) { setState(() => status = 'Clip 1 exceeds video duration (${_formatDuration(m.durationSeconds!)}).'); return; }
+       ranges.add(ClipRange(start,end,clipNameController.text.trim()));
+      for(final e in extraClips){final x=e.start.text.trim(),y=e.end.text.trim();final a=_timeToSeconds(x),b=_timeToSeconds(y);if(a==null||b==null||b<=a){setState(()=>status='Invalid clip range. End must be later than Start.');return;}if(m.durationSeconds!=null && b>m.durationSeconds!+0.25){setState(()=>status='Clip ${ranges.length+1} exceeds video duration (${_formatDuration(m.durationSeconds!)}).');return;}ranges.add(ClipRange(x,y,e.name.text.trim()));}
     }
     final url = controller.text.trim();
     var conflictMode='normal';
@@ -1412,7 +1932,7 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
         if(choice==null||choice=='cancel')return; conflictMode=choice;
       }
     }
-    await widget.downloadManager.start(url: url, format: f, media: m, project: p, collection: collection, outputMode: outputMode, clipStart: start, clipEnd: end, conflictMode: conflictMode);
+    await widget.downloadManager.start(url: url, format: f, media: m, project: p, collection: collection, outputMode: _isDirectOriginal ? 'Video + audio' : outputMode, clipStart: start, clipEnd: end, clipRanges: ranges.length>1?ranges:const [], clipFileMode:clipFileMode, conflictMode: conflictMode);
   }
 
   String sizeText(int? bytes) { if (bytes == null) return ''; if (bytes > 1024*1024*1024) return '${(bytes/(1024*1024*1024)).toStringAsFixed(1)} GB'; if (bytes > 1024*1024) return '${(bytes/(1024*1024)).toStringAsFixed(1)} MB'; return '${(bytes/1024).toStringAsFixed(0)} KB'; }
@@ -1421,6 +1941,7 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
     final active = widget.downloadManager.tasks.where((t) => !t.done && !t.failed && !t.paused && !t.cancelled).toList();
     return Padding(padding: const EdgeInsets.all(28), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('Universal Downloader', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)), const SizedBox(height: 6),
+
       const Text('YouTube, Instagram, TikTok, Pinterest and many other supported public links.', style: TextStyle(color: Color(0xFF8F96A6))), const SizedBox(height: 22),
       Card(child: Padding(padding: const EdgeInsets.all(18), child: Row(children: [Expanded(child: TextField(controller: controller, onSubmitted: (_) => analyzing ? null : analyze(), decoration: InputDecoration(prefixIcon: Icon(Icons.link_rounded), hintText: ffTranslate('Paste media URL...')))), const SizedBox(width: 12), FilledButton.icon(onPressed: analyzing ? null : analyze, icon: analyzing ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.travel_explore_rounded), label: const Text('Analyze'))]))),
       const SizedBox(height: 14), Row(children: [Icon(analyzing ? Icons.sync_rounded : Icons.info_outline_rounded, size: 17, color: const Color(0xFF8F96A6)), const SizedBox(width: 8), Expanded(child: Text(status, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Color(0xFF8F96A6))))]),
@@ -1487,11 +2008,30 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
                             const SizedBox(width: 10),
                             Expanded(child: TextField(controller: clipEndController, decoration: InputDecoration(labelText: ffTranslate('End'), hintText: ffTranslate('00:14:38')))),
                           ]),
+                          const SizedBox(height:8),
+                          TextField(controller:clipNameController,decoration:const InputDecoration(labelText:'Clip 1 name (optional)',hintText:'Leave empty to use time range')),
+                          ...extraClips.asMap().entries.map((entry)=>Padding(
+                            padding:const EdgeInsets.only(top:10),child:Column(children:[Row(children:[
+                              Expanded(child:TextField(controller:entry.value.start,onChanged:(_)=>setState((){}),decoration:InputDecoration(labelText:'Clip ${entry.key+2} start'))),
+                              const SizedBox(width:10),
+                              Expanded(child:TextField(controller:entry.value.end,onChanged:(_)=>setState((){}),decoration:InputDecoration(labelText:'Clip ${entry.key+2} end'))),
+                              IconButton(tooltip:'Remove clip',onPressed:(){setState(()=>extraClips.removeAt(entry.key));entry.value.dispose();},icon:const Icon(Icons.close_rounded))
+                             ]),const SizedBox(height:6),TextField(controller:entry.value.name,decoration:InputDecoration(labelText:'Clip ${entry.key+2} name (optional)'))]))),
+                           Align(alignment:Alignment.centerLeft,child:TextButton.icon(onPressed:()=>setState(()=>extraClips.add(ClipRangeEditor())),icon:const Icon(Icons.add_rounded),label:const Text('Add clip'))),
+                          if(extraClips.isNotEmpty) ...[
+                            const SizedBox(height:8),
+                            SegmentedButton<String>(segments:const [
+                              ButtonSegment(value:'multi',label:Text('Multi File')),
+                              ButtonSegment(value:'single',label:Text('Single File')),
+                            ],selected:{clipFileMode},onSelectionChanged:(v)=>setState(()=>clipFileMode=v.first)),
+                          ],
                           const SizedBox(height: 6),
-                          const Text('HH:MM:SS', style: TextStyle(color: Color(0xFF858C9C), fontSize: 11)),
+                          const Text('HH:MM:SS • Clips are processed in listed order', style: TextStyle(color: Color(0xFF858C9C), fontSize: 11)),
+                           if(media?.durationSeconds!=null) Padding(padding:const EdgeInsets.only(top:5),child:Text('Video duration: ${_formatDuration(media!.durationSeconds!)}',style:const TextStyle(color:Color(0xFF8F96A6),fontSize:11))),
+                           if(_clipValidation!=null) Padding(padding:const EdgeInsets.only(top:8),child:Text(_clipValidation!,style:const TextStyle(color:Color(0xFFFF6B6B),fontSize:12))),
                         ],
                         const SizedBox(height: 14),
-                        DropdownButtonFormField<String>(
+                        if (!_isDirectOriginal) DropdownButtonFormField<String>(
                           value: outputMode,
                           isExpanded: true,
                           decoration: InputDecoration(labelText: ffTranslate('Output')),
@@ -1506,7 +2046,7 @@ class _UniversalDownloaderPageState extends State<UniversalDownloaderPage> {
                           const Text('Video-only format: FFmpeg is required to merge the best audio. Configure ffmpeg.exe in Settings.', style: TextStyle(color: Color(0xFF8F96A6), fontSize: 12, height: 1.4)),
                         ],
                         const SizedBox(height: 18),
-                        SizedBox(width: double.infinity, height: 46, child: FilledButton.icon(onPressed: selected == null ? null : download, icon: const Icon(Icons.download_rounded), label: const Text('Add to downloads'))),
+                        SizedBox(width: double.infinity, height: 46, child: FilledButton.icon(onPressed: selected == null || _clipValidation != null ? null : download, icon: const Icon(Icons.download_rounded), label: const Text('Add to downloads'))),
                       ],
                     ),
                   ),
@@ -1568,7 +2108,7 @@ class _LibraryPageState extends State<LibraryPage> {
   setState(()=>importing=true);var added=0,skipped=0;final pending=<LibraryItem>[];try{for(final pf in picked.files){final path=pf.path;if(path==null)continue;if(widget.store.items.any((e)=>e.filePath.toLowerCase()==path.toLowerCase())){skipped++;continue;}final f=File(path);if(!await f.exists())continue;final ext=(pf.extension??'').toLowerCase();final isImage=['png','jpg','jpeg','webp','gif','bmp'].contains(ext);final isAudio=['mp3','wav','m4a','aac','flac','ogg'].contains(ext);final meta=isImage?('Image',''):isAudio?('Audio',''):await _localVideoMeta(path);final thumb=isImage?path:(isAudio?null:await _makeLocalThumb(path));final size=await f.length();pending.add(LibraryItem(id:'local_${DateTime.now().microsecondsSinceEpoch}_${pending.length}',title:pf.name.replaceFirst(RegExp(r'\.[^.]+$'),''),filePath:path,projectId:target.id,projectName:target.name,formatLabel:'${meta.$1} • ${pf.extension?.toUpperCase()??'FILE'}',thumbnail:thumb,sizeBytes:size,addedAt:DateTime.now()));}added=await widget.store.addItems(pending);}finally{if(mounted)setState(()=>importing=false);}if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$added footage imported${skipped>0?' • $skipped already in Library':''}.')));
  }
  Future<(String,String)> _localVideoMeta(String path) async {try{final ff=DownloaderEngine.ffmpegPath;if(ff.isEmpty||!File(ff).existsSync())return('Local','');final r=await Process.run(ff,['-i',path]);final text='${r.stdout}\n${r.stderr}';final m=RegExp(r'(\d{3,5})x(\d{3,5})').firstMatch(text);if(m!=null){final h=int.tryParse(m.group(2)!)??0;final label=h>=2000?'2160p':h>=1300?'1440p':h>=900?'1080p':h>=650?'720p':h>=400?'480p':'${h}p';return(label,'${m.group(1)}x${m.group(2)}');}}catch(_){}return('Local','');}
- Future<String?> _makeLocalThumb(String path) async {try{final ff=DownloaderEngine.ffmpegPath;if(ff.isEmpty||!File(ff).existsSync())return null;final base='${Platform.environment['LOCALAPPDATA']??Directory.systemTemp.path}${Platform.pathSeparator}FootageCollector${Platform.pathSeparator}thumbnails';await Directory(base).create(recursive:true);final out='$base${Platform.pathSeparator}${DateTime.now().microsecondsSinceEpoch}.jpg';final r=await Process.run(ff,['-y','-ss','00:00:01','-i',path,'-frames:v','1','-vf','scale=320:-1',out]);return r.exitCode==0&&File(out).existsSync()?out:null;}catch(_){return null;}}
+ Future<String?> _makeLocalThumb(String path) async {try{final ff=DownloaderEngine.ffmpegPath;if(ff.isEmpty||!File(ff).existsSync())return null;final base='${Platform.environment['LOCALAPPDATA']??Directory.systemTemp.path}${Platform.pathSeparator}FootageCollector${Platform.pathSeparator}thumbnails';await Directory(base).create(recursive:true);final out='$base${Platform.pathSeparator}${DateTime.now().microsecondsSinceEpoch}.jpg';final r=await Process.run(ff,['-y','-ss','00:00:01','-i',path,'-frames:v','1','-q:v','2',out]);return r.exitCode==0&&File(out).existsSync()?out:null;}catch(_){return null;}}
  void toggleSelection(LibraryItem item){setState((){selectionMode=true;if(!selected.add(item.id))selected.remove(item.id);if(selected.isEmpty)selectionMode=false;});}
  void clearSelection()=>setState((){selected.clear();selectionMode=false;});
  String _uniquePath(String path){if(!File(path).existsSync())return path;final sep=Platform.pathSeparator,slash=path.lastIndexOf(sep),dot=path.lastIndexOf('.');final dir=slash>=0?path.substring(0,slash+1):'',nameEnd=dot>slash?dot:path.length,base=path.substring(slash+1,nameEnd),ext=dot>slash?path.substring(dot):'';var n=2;while(File('$dir$base ($n)$ext').existsSync())n++;return '$dir$base ($n)$ext';}
@@ -1578,11 +2118,11 @@ class _LibraryPageState extends State<LibraryPage> {
   String? collection;final cols=widget.store.collectionsFor(target.id);if(cols.isNotEmpty){collection=await showDialog<String>(context:context,builder:(d)=>SimpleDialog(title:const Text('Destination collection (optional)'),children:[SimpleDialogOption(onPressed:()=>Navigator.pop(d,'__none__'),child:const Text('Unsorted')),...cols.map((c)=>SimpleDialogOption(onPressed:()=>Navigator.pop(d,c),child:Text(c)))]));if(collection==null)return;if(collection=='__none__')collection=null;}
   var conflict='ask',moved=0,skipped=0,failed=0;
   for(final item in moving){try{final src=File(item.filePath);if(!await src.exists()){failed++;continue;}await Directory(target.path).create(recursive:true);var dest='${target.path}${Platform.pathSeparator}${item.filePath.split(Platform.pathSeparator).last}';if(src.path.toLowerCase()==dest.toLowerCase()){await widget.store.updateMovedItem(item,filePath:dest,project:target,collection:collection);moved++;continue;}if(await File(dest).exists()){var choice=conflict;if(conflict=='ask'){if(!mounted)return;choice=await showDialog<String>(context:context,builder:(d)=>AlertDialog(title:const Text('File already exists'),content:Text('${dest.split(Platform.pathSeparator).last} already exists in ${target.name}.'),actions:[TextButton(onPressed:()=>Navigator.pop(d,'skip'),child:const Text('Skip')),TextButton(onPressed:()=>Navigator.pop(d,'keep'),child:const Text('Keep both')),FilledButton(onPressed:()=>Navigator.pop(d,'replace'),child:const Text('Replace'))]))??'skip';}if(choice=='skip'){skipped++;continue;}if(choice=='keep')dest=_uniquePath(dest);if(choice=='replace')await File(dest).delete();}
-    if(copy){await src.copy(dest);final cloned=LibraryItem(id:'copy_${DateTime.now().microsecondsSinceEpoch}_${item.id}',title:item.title,filePath:dest,projectId:target.id,projectName:target.name,formatLabel:item.formatLabel,thumbnail:item.thumbnail==item.filePath?dest:item.thumbnail,collection:collection,sourceUrl:item.sourceUrl,outputMode:item.outputMode,clipStart:item.clipStart,clipEnd:item.clipEnd,sizeBytes:item.sizeBytes,addedAt:DateTime.now(),favorite:item.favorite);await widget.store.addItem(cloned);}else{try{await src.rename(dest);}catch(_){await src.copy(dest);await src.delete();}await widget.store.updateMovedItem(item,filePath:dest,project:target,collection:collection);}moved++;
+    if(copy){await src.copy(dest);final cloned=LibraryItem(id:'copy_${DateTime.now().microsecondsSinceEpoch}_${item.id}',title:item.title,filePath:dest,projectId:target.id,projectName:target.name,formatLabel:item.formatLabel,thumbnail:item.thumbnail==item.filePath?dest:item.thumbnail,collection:collection,sourceUrl:item.sourceUrl,outputMode:item.outputMode,clipStart:item.clipStart,clipEnd:item.clipEnd,sizeBytes:item.sizeBytes,addedAt:DateTime.now(),favorite:item.favorite,tags:item.tags);await widget.store.addItem(cloned);}else{try{await src.rename(dest);}catch(_){await src.copy(dest);await src.delete();}await widget.store.updateMovedItem(item,filePath:dest,project:target,collection:collection);}moved++;
    }catch(_){failed++;}}
   if(mounted){clearSelection();ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$moved ${copy?'copied':'moved'}${skipped>0?' • $skipped skipped':''}${failed>0?' • $failed failed':''}.')));}
  }
- @override Widget build(BuildContext context)=>AnimatedBuilder(animation:widget.store,builder:(_,__){var list=List<LibraryItem>.of(widget.store.items);final q=search.text.trim().toLowerCase();if(q.isNotEmpty)list=list.where((e)=>e.title.toLowerCase().contains(q)||e.projectName.toLowerCase().contains(q)).toList();if(projectId!=null)list=list.where((e)=>e.projectId==projectId).toList();if(resolution!='All')list=list.where((e)=>e.formatLabel.contains(resolution)).toList();if(favorites)list=list.where((e)=>e.favorite).toList();final total=widget.store.items.fold<int>(0,(a,b)=>a+b.sizeBytes);
+ @override Widget build(BuildContext context)=>AnimatedBuilder(animation:widget.store,builder:(_,__){var list=List<LibraryItem>.of(widget.store.items);final q=search.text.trim().toLowerCase();if(q.isNotEmpty)list=list.where((e)=>e.title.toLowerCase().contains(q)||e.projectName.toLowerCase().contains(q)||e.tags.any((t)=>t.toLowerCase().contains(q))).toList();if(projectId!=null)list=list.where((e)=>e.projectId==projectId).toList();if(resolution!='All')list=list.where((e)=>e.formatLabel.contains(resolution)).toList();if(favorites)list=list.where((e)=>e.favorite).toList();final total=widget.store.items.fold<int>(0,(a,b)=>a+b.sizeBytes);
   return KeyboardListener(focusNode:focusNode,autofocus:true,onKeyEvent:(e){if(e is KeyDownEvent&&HardwareKeyboard.instance.isControlPressed&&e.logicalKey==LogicalKeyboardKey.keyA){setState((){selectionMode=true;selected.addAll(list.map((e)=>e.id));});}},child:Padding(padding:const EdgeInsets.all(28),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
    LayoutBuilder(builder:(context,c){final compact=c.maxWidth<850;final title=const Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text('Library',maxLines:1,overflow:TextOverflow.ellipsis,style:TextStyle(fontSize:28,fontWeight:FontWeight.w800)),SizedBox(height:5),Text('Everything you collected, searchable and organized.',maxLines:2,overflow:TextOverflow.ellipsis,style:TextStyle(color:Color(0xFF8F96A6)))]);final actions=Wrap(spacing:8,runSpacing:8,crossAxisAlignment:WrapCrossAlignment.center,children:selectionMode?[Text('${selected.length} selected',style:const TextStyle(fontWeight:FontWeight.w700)),FilledButton.icon(onPressed:selected.isEmpty?null:()=>transferSelected(copy:false),icon:const Icon(Icons.drive_file_move_rounded),label:const Text('Move to project')),OutlinedButton.icon(onPressed:selected.isEmpty?null:()=>transferSelected(copy:true),icon:const Icon(Icons.copy_rounded),label:const Text('Copy to project')),OutlinedButton(onPressed:clearSelection,child:const Text('Cancel'))]:[OutlinedButton.icon(onPressed:()=>setState(()=>selectionMode=true),icon:const Icon(Icons.checklist_rounded),label:const Text('Select')),FilledButton.icon(onPressed:importing?null:importFootage,icon:importing?const SizedBox(width:16,height:16,child:CircularProgressIndicator(strokeWidth:2)):const Icon(Icons.add_rounded),label:Text(importing?'Importing...':'Import footage')),Text('${widget.store.items.length} items • ${_size(total)}',style:const TextStyle(color:Color(0xFF8F96A6)))]);return compact?Column(crossAxisAlignment:CrossAxisAlignment.start,children:[title,const SizedBox(height:14),Align(alignment:Alignment.centerRight,child:actions)]):Row(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:title),const SizedBox(width:24),Align(alignment:Alignment.topRight,child:actions)]);}),const SizedBox(height:20),
    LayoutBuilder(builder:(context,c){
@@ -1618,7 +2158,38 @@ class LibraryGrid extends StatelessWidget {
 }
 class LibraryCard extends StatelessWidget { final LibraryItem item;final LibraryStore store;final List<ProjectModel> projects;final bool selectionMode,selected;final VoidCallback? onToggle;final List<String> dragPaths;const LibraryCard({super.key,required this.item,required this.store,required this.projects,this.selectionMode=false,this.selected=false,this.onToggle,this.dragPaths=const <String>[]});
  String get _mediaType=>_libraryMediaType(item.filePath,item.formatLabel);
- IconData get _mediaIcon=>_mediaType=='Audio'?Icons.music_note_rounded:_mediaType=='Image'?Icons.image_rounded:Icons.videocam_rounded; Future<void> details(BuildContext context) async { await showDialog(context:context,builder:(d)=>AlertDialog(title:Text(item.title,maxLines:2,overflow:TextOverflow.ellipsis),content:ConstrainedBox(constraints:BoxConstraints(maxWidth:560,maxHeight:MediaQuery.sizeOf(d).height*0.72),child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[Container(height:250,width:double.infinity,clipBehavior:Clip.antiAlias,decoration:BoxDecoration(color:const Color(0xFF0E1117),borderRadius:BorderRadius.circular(12)),child:item.thumbnail==null?Icon(_mediaIcon,size:60):_thumbImage(item.thumbnail!,fallbackSize:60)),const SizedBox(height:14),Text('${item.projectName} • ${item.formatLabel} • ${_size(item.sizeBytes)}',style:const TextStyle(color:Color(0xFF8F96A6))),const SizedBox(height:8),SelectableText(item.filePath,style:const TextStyle(fontSize:12,color:Color(0xFF858C9C))),const SizedBox(height:14),Container(width:double.infinity,padding:const EdgeInsets.all(12),decoration:BoxDecoration(color:const Color(0xFF0E1117),borderRadius:BorderRadius.circular(10)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Source',style:TextStyle(fontWeight:FontWeight.w700)),const SizedBox(height:6),SelectableText(item.sourceUrl?.isNotEmpty==true?item.sourceUrl!:'Local import',style:TextStyle(fontSize:12,color:item.sourceUrl?.isNotEmpty==true?const Color(0xFF22D3EE):const Color(0xFF858C9C))),if(item.sourceUrl?.isNotEmpty==true)...[const SizedBox(height:8),Wrap(spacing:8,children:[TextButton.icon(onPressed:()=>Clipboard.setData(ClipboardData(text:item.sourceUrl!)),icon:const Icon(Icons.copy_rounded,size:16),label:const Text('Copy link')),TextButton.icon(onPressed:()=>Process.run('cmd',['/c','start','',item.sourceUrl!],runInShell:true),icon:const Icon(Icons.open_in_new_rounded,size:16),label:const Text('Open source'))])]])),const SizedBox(height:14),DropdownButtonFormField<String?>(value:item.collection,hint:const Text('No collection'),items:[const DropdownMenuItem<String?>(value:null,child:Text('No collection')),...store.collectionsFor(item.projectId).map((e)=>DropdownMenuItem<String?>(value:e,child:Text(e)))],onChanged:(v){store.moveToCollection(item,v);Navigator.pop(d);})]))),actions:[TextButton.icon(onPressed:(){Process.run('explorer.exe',['/select,',item.filePath]);},icon:const Icon(Icons.folder_open_rounded),label:const Text('Show in folder')),TextButton.icon(onPressed:(){Process.run(item.filePath,[],runInShell:true);},icon:const Icon(Icons.play_arrow_rounded),label:const Text('Open file')),PopupMenuButton<String>(onSelected:(v)async{Navigator.pop(d);if(v=='library')await store.remove(item);if(v=='disk')await store.remove(item,deleteFile:true);},itemBuilder:(_)=>const [PopupMenuItem(value:'library',child:Text('Remove from Library')),PopupMenuItem(value:'disk',child:Text('Delete file from disk',style:TextStyle(color:Color(0xFFFF6B6B))))],child:const Padding(padding:EdgeInsets.all(10),child:Icon(Icons.delete_outline_rounded))) ])); }
+ Future<void> editTags(BuildContext context) async {
+   final controller=TextEditingController(text:item.tags.join(', '));
+   final result=await showDialog<String>(context:context,builder:(d)=>AlertDialog(title:Text('Tags • ${item.title}',maxLines:2),content:SizedBox(width:440,child:TextField(controller:controller,autofocus:true,maxLines:3,decoration:const InputDecoration(labelText:'Tags',hintText:'cinematic, nature, intro',helperText:'Separate tags with commas'))),actions:[TextButton(onPressed:()=>Navigator.pop(d),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(d,controller.text),child:const Text('Save'))]));
+   controller.dispose();if(result==null)return;
+   final unique=<String>{};final tags=<String>[];
+   for(final part in result.split(',')){final t=part.trim();if(t.isNotEmpty&&unique.add(t.toLowerCase()))tags.add(t);}
+   await store.updateTags(item,tags);
+ }
+ IconData get _mediaIcon=>_mediaType=='Audio'?Icons.music_note_rounded:_mediaType=='Image'?Icons.image_rounded:Icons.videocam_rounded; Future<void> details(BuildContext context) async { await showDialog(context:context,builder:(d)=>AlertDialog(title:Text(item.title,maxLines:2,overflow:TextOverflow.ellipsis),content:ConstrainedBox(constraints:BoxConstraints(maxWidth:560,maxHeight:MediaQuery.sizeOf(d).height*0.72),child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,crossAxisAlignment:CrossAxisAlignment.start,children:[Container(height:250,width:double.infinity,clipBehavior:Clip.antiAlias,decoration:BoxDecoration(color:const Color(0xFF0E1117),borderRadius:BorderRadius.circular(12)),child:item.thumbnail==null?Icon(_mediaIcon,size:60):_thumbImage(item.thumbnail!,fallbackSize:60)),const SizedBox(height:14),Text('${item.projectName} • ${item.formatLabel} • ${_size(item.sizeBytes)}',style:const TextStyle(color:Color(0xFF8F96A6))),const SizedBox(height:8),SelectableText(item.filePath,style:const TextStyle(fontSize:12,color:Color(0xFF858C9C))),const SizedBox(height:14),Container(width:double.infinity,padding:const EdgeInsets.all(12),decoration:BoxDecoration(color:const Color(0xFF0E1117),borderRadius:BorderRadius.circular(10)),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Source',style:TextStyle(fontWeight:FontWeight.w700)),const SizedBox(height:6),SelectableText(item.sourceUrl?.isNotEmpty==true?item.sourceUrl!:'Local import',style:TextStyle(fontSize:12,color:item.sourceUrl?.isNotEmpty==true?const Color(0xFF22D3EE):const Color(0xFF858C9C))),if(item.sourceUrl?.isNotEmpty==true)...[const SizedBox(height:8),Wrap(spacing:8,children:[TextButton.icon(onPressed:()=>Clipboard.setData(ClipboardData(text:item.sourceUrl!)),icon:const Icon(Icons.copy_rounded,size:16),label:const Text('Copy link')),TextButton.icon(onPressed:()=>Process.run('cmd',['/c','start','',item.sourceUrl!],runInShell:true),icon:const Icon(Icons.open_in_new_rounded,size:16),label:const Text('Open source'))])]])),const SizedBox(height:14),Wrap(spacing:6,runSpacing:6,children:[...item.tags.map((t)=>Chip(label:Text(t))),ActionChip(avatar:const Icon(Icons.edit_outlined,size:16),label:const Text('Edit tags'),onPressed:(){Navigator.pop(d);editTags(context);})]),const SizedBox(height:14),DropdownButtonFormField<String?>(value:item.collection,hint:const Text('No collection'),items:[const DropdownMenuItem<String?>(value:null,child:Text('No collection')),...store.collectionsFor(item.projectId).map((e)=>DropdownMenuItem<String?>(value:e,child:Text(e)))],onChanged:(v){store.moveToCollection(item,v);Navigator.pop(d);})]))),actions:[TextButton.icon(onPressed:() async {
+    final choice=await showDialog<String>(context:context,builder:(c)=>AlertDialog(
+      title:const Text('Refresh thumbnail'),
+      content:const Text('Use the highest available source image, or extract a high-quality frame from this video.'),
+      actions:[
+        TextButton(onPressed:()=>Navigator.pop(c),child:const Text('Cancel')),
+        OutlinedButton(onPressed:()=>Navigator.pop(c,'frame'),child:const Text('Video frame')),
+        FilledButton(onPressed:()=>Navigator.pop(c,'source'),child:const Text('Original thumbnail')),
+      ]));
+    if(choice==null)return;
+    if(!context.mounted)return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Refreshing thumbnail...')));
+    try {
+      final thumb=await _refreshHighQualityThumbnail(item,useVideoFrame:choice=='frame');
+      if(thumb==null)throw StateError('No thumbnail was generated.');
+      await store.updateThumbnail(item,thumb);
+      if(context.mounted) {
+        Navigator.pop(d);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Thumbnail refreshed.')));
+      }
+    } catch(e) {
+      if(context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Thumbnail refresh failed: $e')));
+    }
+  },icon:const Icon(Icons.refresh_rounded),label:const Text('Refresh thumbnail')),TextButton.icon(onPressed:(){Process.run('explorer.exe',['/select,',item.filePath]);},icon:const Icon(Icons.folder_open_rounded),label:const Text('Show in folder')),TextButton.icon(onPressed:(){Process.run(item.filePath,[],runInShell:true);},icon:const Icon(Icons.play_arrow_rounded),label:const Text('Open file')),PopupMenuButton<String>(onSelected:(v)async{Navigator.pop(d);if(v=='library')await store.remove(item);if(v=='disk')await store.remove(item,deleteFile:true);},itemBuilder:(_)=>const [PopupMenuItem(value:'library',child:Text('Remove from Library')),PopupMenuItem(value:'disk',child:Text('Delete file from disk',style:TextStyle(color:Color(0xFFFF6B6B))))],child:const Padding(padding:EdgeInsets.all(10),child:Icon(Icons.delete_outline_rounded))) ])); }
  Future<void> contextMenu(BuildContext context, TapDownDetails d) async {
   final overlay=Overlay.of(context).context.findRenderObject() as RenderBox;
   final v=await showMenu<String>(context:context,position:RelativeRect.fromRect(Rect.fromPoints(d.globalPosition,d.globalPosition),Offset.zero&overlay.size),items:const [
@@ -1643,7 +2214,7 @@ class LibraryCard extends StatelessWidget { final LibraryItem item;final Library
   }
  }
  @override Widget build(BuildContext context){
-  final card=GestureDetector(onSecondaryTapDown:(d){if(!selectionMode)contextMenu(context,d);},child:Card(clipBehavior:Clip.antiAlias,shape:selected?RoundedRectangleBorder(side:const BorderSide(color:Color(0xFF8B5CF6),width:2),borderRadius:BorderRadius.circular(12)):null,child:InkWell(onTap:(){if(selectionMode||HardwareKeyboard.instance.isControlPressed){onToggle?.call();}else{details(context);}},child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:Stack(fit:StackFit.expand,children:[item.thumbnail==null?ColoredBox(color:const Color(0xFF0E1117),child:Icon(_mediaIcon,size:46)):_thumbImage(item.thumbnail!,fallbackSize:46),Positioned(top:8,left:8,child:_MediaTypeBadge(type:_mediaType)),Positioned(top:39,left:8,child:_SourceBadge(url:item.sourceUrl)),if(selectionMode)Positioned(bottom:8,left:8,child:Container(width:25,height:25,decoration:BoxDecoration(color:selected?const Color(0xFF8B5CF6):Colors.black54,shape:BoxShape.circle,border:Border.all(color:Colors.white70)),child:Icon(selected?Icons.check_rounded:Icons.circle_outlined,size:17,color:Colors.white))),Positioned(top:7,right:7,child:Material(color:Colors.black54,borderRadius:BorderRadius.circular(20),child:IconButton(visualDensity:VisualDensity.compact,onPressed:()=>store.toggleFavorite(item),icon:Icon(item.favorite?Icons.star_rounded:Icons.star_border_rounded,color:item.favorite?const Color(0xFFFFC857):Colors.white))))])),Padding(padding:const EdgeInsets.all(11),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(item.title,maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontWeight:FontWeight.w700)),const SizedBox(height:5),Text('${item.projectName} • ${item.formatLabel}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Color(0xFF8F96A6),fontSize:11)),const SizedBox(height:3),Row(children:[Expanded(child:Text(item.collection??'Unsorted',overflow:TextOverflow.ellipsis,style:const TextStyle(color:Color(0xFF22D3EE),fontSize:11))),Text(_size(item.sizeBytes),style:const TextStyle(color:Color(0xFF858C9C),fontSize:11))])]))]))));
+  final card=GestureDetector(onSecondaryTapDown:(d){if(!selectionMode)contextMenu(context,d);},child:Card(clipBehavior:Clip.antiAlias,shape:selected?RoundedRectangleBorder(side:const BorderSide(color:Color(0xFF8B5CF6),width:2),borderRadius:BorderRadius.circular(12)):null,child:InkWell(onTap:(){if(selectionMode||HardwareKeyboard.instance.isControlPressed){onToggle?.call();}else{details(context);}},child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Expanded(child:Stack(fit:StackFit.expand,children:[item.thumbnail==null?ColoredBox(color:const Color(0xFF0E1117),child:Icon(_mediaIcon,size:46)):_thumbImage(item.thumbnail!,fallbackSize:46),Positioned(top:8,left:8,child:_MediaTypeBadge(type:_mediaType)),Positioned(top:39,left:8,child:_SourceBadge(url:item.sourceUrl)),if(selectionMode)Positioned(bottom:8,left:8,child:Container(width:25,height:25,decoration:BoxDecoration(color:selected?const Color(0xFF8B5CF6):Colors.black54,shape:BoxShape.circle,border:Border.all(color:Colors.white70)),child:Icon(selected?Icons.check_rounded:Icons.circle_outlined,size:17,color:Colors.white))),Positioned(top:7,right:7,child:Material(color:Colors.black54,borderRadius:BorderRadius.circular(20),child:IconButton(visualDensity:VisualDensity.compact,onPressed:()=>store.toggleFavorite(item),icon:Icon(item.favorite?Icons.star_rounded:Icons.star_border_rounded,color:item.favorite?const Color(0xFFFFC857):Colors.white))))])),Padding(padding:const EdgeInsets.all(11),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(item.title,maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(fontWeight:FontWeight.w700)),const SizedBox(height:5),Text(item.tags.isEmpty?'${item.projectName} • ${item.formatLabel}':'${item.projectName} • ${item.tags.join(' • ')}',maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:Color(0xFF8F96A6),fontSize:11)),const SizedBox(height:3),Row(children:[Expanded(child:Text(item.collection??'Unsorted',overflow:TextOverflow.ellipsis,style:const TextStyle(color:Color(0xFF22D3EE),fontSize:11))),Text(_size(item.sizeBytes),style:const TextStyle(color:Color(0xFF858C9C),fontSize:11))])]))]))));
   return GestureDetector(
     behavior:HitTestBehavior.translucent,
     onHorizontalDragStart:(_)=>_NativeFileDrag.start(dragPaths.isEmpty?<String>[item.filePath]:dragPaths),
@@ -1815,11 +2386,13 @@ class _SettingsPageState extends State<SettingsPage> {
   String? youtubeCookiesFile;
   final proxyHostController=TextEditingController();
   final proxyPortController=TextEditingController();
+  bool focusChromeLinks = true;
   bool checking=false;
   bool checkingYtDlp=false;
   bool? valid;
   bool? validYtDlp;
-  @override void initState(){super.initState();_load();}
+  @override void initState(){super.initState();_load();_loadFocusPreference();}
+  Future<void> _loadFocusPreference() async { final prefs = await SharedPreferences.getInstance(); if (mounted) setState(() => focusChromeLinks = prefs.getBool(FootageFlowWindowFocus.preferenceKey) ?? true); }
   Future<void> _load() async { final p=await AppSettingsStore.loadFfmpegPath(); final y=await AppSettingsStore.loadYtDlpPath(); final d=await AppSettingsStore.loadDefaultDownloadPath(); final pm=await AppSettingsStore.loadProxyMode(); final pu=await AppSettingsStore.loadProxyUrl(); final yam=await AppSettingsStore.loadYoutubeAuthMode(); final yab=await AppSettingsStore.loadYoutubeBrowser(); final ycf=await AppSettingsStore.loadYoutubeCookiesFile(); if(!mounted)return; setState((){path=p;ytDlpPath=y;defaultDownloadPath=d;proxyMode=pm;youtubeAuthMode=yam;youtubeBrowser=yab;youtubeCookiesFile=ycf; final raw=(pu??'').trim(); if(raw.isNotEmpty){ try { final normalized=raw.contains('://')?raw:'http://$raw'; final u=Uri.parse(normalized); proxyHostController.text=u.host.isNotEmpty?u.host:raw.split(':').first; proxyPortController.text=u.hasPort?u.port.toString():(raw.contains(':')?raw.split(':').last:''); } catch(_){ final parts=raw.replaceFirst(RegExp(r'^https?://'), '').split(':'); proxyHostController.text=parts.isNotEmpty?parts.first:''; proxyPortController.text=parts.length>1?parts.last:''; } }}); if(p!=null) await _check(p); if(y!=null) await _checkYtDlp(y); }
   Future<void> _check(String p) async { setState(()=>checking=true); final ok=await DownloaderEngine.validateFfmpeg(p); if(mounted)setState((){checking=false;valid=ok;}); }
   Future<void> _browse() async {
@@ -1873,6 +2446,22 @@ class _SettingsPageState extends State<SettingsPage> {
   }
   @override void dispose(){proxyHostController.dispose();proxyPortController.dispose();super.dispose();}
   @override Widget build(BuildContext context)=>SingleChildScrollView(padding:const EdgeInsets.all(28),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      Card(child: ListTile(leading: const Icon(Icons.extension_rounded), title: const Text('Chrome extension'),
+        subtitle: const Text('Pairing is approved inside FootageFlow. No token entry required.'),
+        trailing: TextButton(onPressed: () async { await FootageFlowChromeBridge.revokeAll(); if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Chrome extension connections reset.'))); }, child: const Text('Disconnect all')))),
+
+    Card(child: SwitchListTile(
+      secondary: const Icon(Icons.open_in_new_rounded),
+      title: const Text('Focus FootageFlow when receiving links'),
+      subtitle: const Text('Bring the Windows window forward when Chrome sends a link.'),
+      value: focusChromeLinks,
+      onChanged: (enabled) async {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(FootageFlowWindowFocus.preferenceKey, enabled);
+        if (mounted) setState(() => focusChromeLinks = enabled);
+      },
+    )),
+    const SizedBox(height: 12),
     Container(constraints: const BoxConstraints(maxWidth:760), padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(color: const Color(0xFF13161D), borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFF292E3A))),
       child: Row(children: [
